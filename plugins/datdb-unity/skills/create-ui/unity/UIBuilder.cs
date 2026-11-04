@@ -23,7 +23,7 @@ namespace DatdbUI
 {
     public static class UIBuilder
     {
-        public const int Version = 5;
+        public const int Version = 6;
 
         [Serializable] public class Move { public string from; public string to; }
 
@@ -406,6 +406,7 @@ namespace DatdbUI
             PrefabUtility.SaveAsPrefabAsset(rootGo, prefabPath, out saved);
             AssetDatabase.SaveAssets();
             if (!saved || !File.Exists(prefabPath)) { rep.errors.Add("prefab save failed: " + prefabPath); return; }
+            CheckOutlineMats(rep);
             rep.prefab = prefabPath;
             rep.log.Add((exists ? "replaced " : "created ") + prefabPath + " with " + nodes.Length + " nodes");
         }
@@ -571,15 +572,27 @@ namespace DatdbUI
             string baseName = dir + "/" + font.name + " Outline " + colorName;
             string file = baseName + ".mat";
             for (int i = 2; File.Exists(file); i++) file = baseName + " " + i + ".mat";
+            // Set everything BEFORE CreateAsset: changes made after it were lost on disk (PausedUI/BoosterUI, Version 5),
+            // so the first write must already hold the outline. CheckOutlineMats checks the files after the build.
             var mat = new Material(font.material);
-            AssetDatabase.CreateAsset(mat, file);
             mat.SetColor(ShaderUtilities.ID_OutlineColor, c);
             mat.EnableKeyword("OUTLINE_ON");
             mat.DisableKeyword("RATIOS_OFF");   // keep ratios ON; RATIOS_OFF caused square artifacts
             SolveWidth(mat, texels / gs / 2f);
-            EditorUtility.SetDirty(mat);
+            AssetDatabase.CreateAsset(mat, file);
             rep.materials_created.Add(file);
             return mat;
+        }
+
+        // The renders use the in-memory materials, so a material that is wrong on disk would still pass verify.py.
+        static void CheckOutlineMats(Report rep)
+        {
+            foreach (var path in rep.materials_created.Concat(rep.materials_reused).Distinct())
+            {
+                string txt = File.Exists(path) ? File.ReadAllText(path) : "";
+                if (!txt.Contains("OUTLINE_ON") || txt.Contains("_OutlineWidth: 0\n"))
+                    rep.errors.Add("outline material not saved on disk (no OUTLINE_ON or width 0): " + path);
+            }
         }
 
         static string Render(Camera cam, string file, int scale)

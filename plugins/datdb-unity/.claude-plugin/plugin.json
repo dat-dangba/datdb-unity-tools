@@ -1,6 +1,6 @@
 {
   "name": "datdb-unity",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Unity tools for Claude Code. Skill create-ui: build uGUI prefabs from a Figma frame, a PSD or a PNG mockup, reusing project sprites and TMP fonts.",
   "author": {
     "name": "datdb"
