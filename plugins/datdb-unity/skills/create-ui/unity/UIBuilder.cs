@@ -1,4 +1,4 @@
-// Installed by the datdb-unity-ui skill (plugin datdb-unity, skills/datdb-unity-ui/unity/UIBuilder.cs). Edit that
+// Installed by the create-ui skill (plugin datdb-unity, skills/create-ui/unity/UIBuilder.cs). Edit that
 // template and bump Version; the skill's setup.py re-copies it into Assets/_Project/Editor/ whenever the files differ.
 //
 // One call builds a whole uGUI screen from a spec.json (format: reference/spec.md in the skill) and saves it as a

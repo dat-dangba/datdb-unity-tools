@@ -1,4 +1,4 @@
-// Read-only use_figma script for the datdb-unity-ui skill (step 1 + 2 in ONE Figma call).
+// Read-only use_figma script for the create-ui skill (step 1 + 2 in ONE Figma call).
 // Replace __NODE_ID__ with the frame id ("A:B"). Returns the font list AND every node's properties, hidden ones
 // included, so neither get_metadata nor a second use_figma call is needed. Save the returned JSON as
 // <scratchpad>/build_<name>/figma_dump.json; figma_spec.py reads it.
