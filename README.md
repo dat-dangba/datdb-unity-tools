@@ -34,12 +34,12 @@ Font phải có sẵn dạng TMP SDF trong `Fonts/`. Thiếu font thì skill d�
 
 ## Cài đặt
 
-Repo: https://github.com/dat-dangba/datdb-unity-ui-marketplace
+Repo: https://github.com/dat-dangba/datdb-unity-tools
 
 Chạy trong Claude Code (terminal `claude`), hai lệnh, mỗi máy một lần:
 
 ```
-/plugin marketplace add dat-dangba/datdb-unity-ui-marketplace
+/plugin marketplace add dat-dangba/datdb-unity-tools
 ```
 
 ```
