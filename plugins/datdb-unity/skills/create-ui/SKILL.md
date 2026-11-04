@@ -72,7 +72,8 @@ in every path, including the C# strings.
   them overlaps it (a warning says which). `--no-nest` keeps only the labels (rule: `nest_contained` in
   `spec_common.py`, reference/spec.md).
 - Names: PascalCase, role + type suffix (`PopupFrame`, `TitleBanner`, `HeartIcon`, `CloseButton`, `TitleText`;
-  texts by role, not content; swaps share the stem: `HintIcon`/`UndoIcon`; the top group is `Content`). Layer
+  texts by role, not content; swaps share the stem: `HintIcon`/`UndoIcon`; the top group is `Content`). Every
+  image whose final name (after the rename map) contains `Button` gets a `Button` component (raycast on). Layer
   names that don't follow this come from the source. Fix them with a rename map `<source>.names.json` next to
   the PSD/PNG (picked up on its own), or `--names <file>` (Figma: always `--names`):
   `{"Group 5": "PopupFrame", "booster/Shape 1 copy": "Sparkle2"}`. A key is a layer name (every layer with it)

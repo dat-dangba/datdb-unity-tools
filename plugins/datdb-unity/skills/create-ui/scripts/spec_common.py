@@ -293,7 +293,8 @@ def load_names(path):
 
 def rename_nodes(nodes, names, warnings):
     """Apply the rename map before nesting. A key is a source path ("booster/Shape 1 copy") or a bare layer name
-    (every layer with that name); a path wins. Returns the set of renamed nodes' ids."""
+    (every layer with that name); a path wins. An image renamed to "...Button" becomes a button (Button component).
+    Returns the set of renamed nodes' ids."""
     renamed, hit, new_path = set(), set(), {}
     for n in nodes:
         old = path_of(n)
@@ -303,6 +304,8 @@ def rename_nodes(nodes, names, warnings):
             hit.add(key)
             renamed.add(id(n))
             n["name"] = names[key]
+            if n["type"] == "image" and "button" in n["name"].lower():
+                n["button"] = True
         n["parent"] = parent
         new_path[old] = path_of(n)
     for k in names:
