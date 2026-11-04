@@ -2,7 +2,7 @@
 
 Plugin Unity cho Claude Code. Hiện có skill:
 
-- **`datdb-unity-ui`**: dựng một màn hình uGUI thành prefab `Assets/_Project/Prefabs/UI/<Tên UI>.prefab` từ một
+- **`create-ui`**: dựng một màn hình uGUI thành prefab `Assets/_Project/Prefabs/UI/<Tên UI>.prefab` từ một
 frame Figma, một file PSD hoặc một ảnh PNG mockup, dùng lại sprite và font TMP có sẵn trong project.
 
 Chạy được trên macOS, Linux và Windows.
@@ -47,7 +47,7 @@ Chạy trong Claude Code (terminal `claude`), hai lệnh, mỗi máy một lần
 ```
 
 Lệnh đầu thêm marketplace `datdb-unity-tools` từ repo này, lệnh sau cài plugin `datdb-unity` trong đó (gồm skill
-`datdb-unity-ui`). Nếu repo
+`create-ui`). Nếu repo
 để private, máy phải đăng nhập GitHub được (clone được repo bằng SSH key hoặc credential).
 
 Cập nhật khi có bản mới:
@@ -62,13 +62,13 @@ Người sửa plugin: tăng `version` trong `plugins/datdb-unity/.claude-plugin
 
 ## Cách dùng
 
-Mở Claude Code ở thư mục gốc project Unity (thư mục chứa `Assets/`), mở Unity Editor, rồi gõ `/datdb-unity-ui` và
-chọn skill (trong danh sách có thể hiện là `datdb-unity:datdb-unity-ui`), kèm nguồn:
+Mở Claude Code ở thư mục gốc project Unity (thư mục chứa `Assets/`), mở Unity Editor, rồi gõ `/create-ui` và
+chọn skill (trong danh sách có thể hiện là `datdb-unity:create-ui`), kèm nguồn:
 
 ```
-/datdb-unity-ui Psd/BackToHomeUI.psd
-/datdb-unity-ui https://www.figma.com/design/<fileKey>/...?node-id=12-34
-/datdb-unity-ui Mockups/ShopUI.png
+/create-ui Psd/BackToHomeUI.psd
+/create-ui https://www.figma.com/design/<fileKey>/...?node-id=12-34
+/create-ui Mockups/ShopUI.png
 ```
 
 - Prefab đã tồn tại: skill hỏi ghi đè (`--replace`, giữ GUID) hay đặt tên khác (`--name X`).

@@ -1,10 +1,10 @@
 ---
-name: datdb-unity-ui
-description: Build a uGUI screen as a prefab in Assets/_Project/Prefabs/UI from a Figma frame link, a PSD file or a flat PNG mockup, reusing project sprites and TMP fonts. Use when the user runs /datdb-unity-ui <figma link | path/to/file.psd | path/to/file.png>.
+name: create-ui
+description: Build a uGUI screen as a prefab in Assets/_Project/Prefabs/UI from a Figma frame link, a PSD file or a flat PNG mockup, reusing project sprites and TMP fonts. Use when the user runs /create-ui <figma link | path/to/file.psd | path/to/file.png>.
 argument-hint: <figma-url | path/to/file.psd | path/to/file.png>
 ---
 
-# datdb-unity-ui
+# create-ui
 
 Builds a Unity uGUI screen as a prefab `Assets/_Project/Prefabs/UI/<UI name>.prefab` from one source given in
 `$ARGUMENTS`. UIBuilder lays out and renders the UI in its own preview scene (a world-space canvas and a camera
