@@ -117,13 +117,44 @@ def figma_gradient(paint, base, path, warnings):
     return out, [255, 255, 255, base[3] if base else 255]
 
 
+def ps_align(justification, path, warnings):
+    """Photoshop paragraph Justification -> spec align. 0 left, 1 right, 2 center, 3/4/5 justified with the last line
+    left/right/center, 6 justify all (built as left)."""
+    j = int(justification or 0)
+    align = {0: "left", 1: "right", 2: "center", 3: "left", 4: "right", 5: "center"}.get(j, "left")
+    if j >= 3:
+        warnings.append(f"{path}: justified paragraph (Justification {j}) built as {align} aligned")
+    return align
+
+
+INVALID_NAME = re.compile(r'[/\\:*?"<>|\x00-\x1f]+')
+
+
+def safe_ui_name(name, warnings):
+    """UI name = prefab file name and Images/UI/<name>/ folder: no path separators or characters Windows rejects.
+    "Popup / Shop" -> "Popup_Shop"."""
+    clean = re.sub(r"\s*_\s*", "_", INVALID_NAME.sub("_", name)).strip(" ._") or "UI"
+    if clean != name:
+        warnings.append(f"UI name '{name}' has characters a file or folder name can't hold; built as '{clean}' "
+                        f"(use --name to choose another)")
+    return clean
+
+
 def file_stem(name):
     return re.sub(r"[^A-Za-z0-9_\-]+", "", name) or "layer"
 
 
+_pixels = {}   # path -> RGBA int array; a build compares the same few files many times
+
+
+def pixels(path):
+    if path not in _pixels:
+        _pixels[path] = np.asarray(Image.open(path).convert("RGBA")).astype(np.int16)
+    return _pixels[path]
+
+
 def same_pixels(a_path, b_path):
-    a = np.asarray(Image.open(a_path).convert("RGBA")).astype(int)
-    b = np.asarray(Image.open(b_path).convert("RGBA")).astype(int)
+    a, b = pixels(a_path), pixels(b_path)
     return a.shape == b.shape and np.abs(a - b).mean() <= match_sprites.SAME_ART
 
 
@@ -169,9 +200,23 @@ class SpritePlanner:
         self.stale = set()       # own-folder copies a 9-slice match replaced (unused once built)
         self.assigned = {}       # source file -> asset path
         self.planned = set()
+        self._cache, self._sizes = {}, {}
 
     def rel(self, p):
         return os.path.relpath(p, self.project).replace(os.sep, "/")
+
+    def _shape(self, f):
+        if f not in self._sizes:
+            with Image.open(f) as im:   # header only
+                self._sizes[f] = im.size
+        return self._sizes[f]
+
+    def _loaded(self, f):
+        """(float RGBA array, slice_info) of f, read once per build."""
+        if f not in self._cache:
+            arr = match_sprites.load(f)
+            self._cache[f] = (arr, match_sprites.slice_info(arr))
+        return self._cache[f]
 
     def sprite_for(self, f, label):
         """-> (asset path, offset [dx, dy] of the sprite inside f, matched size (w, h) or None = size of f)."""
@@ -199,13 +244,13 @@ class SpritePlanner:
             self.assigned[f] = path
             return path, off, (round(w * sc), round(h * sc))
         for prev_file, prev in self.assigned.items():   # same art twice in this design (Shape 1 / Shape 1 copy ...)
-            if same_pixels(prev_file, f):
+            if self._shape(prev_file) == self._shape(f) and same_pixels(prev_file, f):
                 self.assigned[f] = prev
                 return prev, [0, 0], None
-        cand = match_sprites.load(f)
-        ci = match_sprites.slice_info(cand)
+        cand, ci = self._loaded(f)
         for prev_file, prev in self.assigned.items():   # the same button art at two widths in this design
-            r = match_sprites.slice_fit(match_sprites.load(prev_file), cand, di=ci)
+            src, si = self._loaded(prev_file)
+            r = match_sprites.slice_fit(src, cand, si=si, di=ci)   # cheap pre-filter first, pixels only if plausible
             if r and self.borders.get(prev, r["slice"]) == r["slice"]:
                 self.borders[prev] = r["slice"]
                 self.reused.append(f"{label} -> {prev} (Sliced, border {r['slice']}, diff {r['diff']})")
@@ -367,7 +412,7 @@ def load_names(path):
     """The rename map: {"<layer name or source path>": "NewName"}. {} when there is no file."""
     if not path or not os.path.exists(path):
         return {}
-    names = json.load(open(path))
+    names = json.load(open(path, encoding="utf-8"))
     bad = [k for k, v in names.items() if not isinstance(v, str) or not v or "/" in v]
     if bad:
         raise SystemExit(f"{path}: new names must be non-empty strings without '/': {bad}")
@@ -440,7 +485,7 @@ def meta_border(project, path):
     meta = os.path.join(project, path + ".meta")
     if not os.path.exists(meta):
         return None
-    m = re.search(r"spriteBorder: \{x: ([\d.]+), y: ([\d.]+), z: ([\d.]+), w: ([\d.]+)\}", open(meta).read())
+    m = re.search(r"spriteBorder: \{x: ([\d.]+), y: ([\d.]+), z: ([\d.]+), w: ([\d.]+)\}", open(meta, encoding="utf-8").read())
     b = [round(float(v)) for v in m.groups()] if m else None
     return b if b and any(b) else None
 
@@ -476,7 +521,7 @@ def write_spec(out, name, frame, reference, replace, nodes, planner, warnings, n
     for n in nodes:
         n.setdefault("parent", "")
         n.setdefault("visible", True)
-        for key in ("stretch", "empty", "button"):
+        for key in ("stretch", "empty", "button", "wrap"):
             n.setdefault(key, False)
     if variants is None:
         variants = find_variants(nodes)
@@ -488,7 +533,7 @@ def write_spec(out, name, frame, reference, replace, nodes, planner, warnings, n
         "move_to_common": planner.moves, "new_sprites": planner.new_sprites, "nodes": nodes, "variants": variants,
     }
     os.makedirs(out, exist_ok=True)
-    with open(os.path.join(out, "spec.json"), "w") as f:
+    with open(os.path.join(out, "spec.json"), "w", encoding="utf-8") as f:
         json.dump(spec, f, ensure_ascii=False, indent=1)
     print(json.dumps({"spec": os.path.join(out, "spec.json"), "name": name, "frame": spec["frame"], "fonts": fonts,
                       "new_sprites": [s["to"] for s in planner.new_sprites], "reused": planner.reused,
@@ -502,8 +547,21 @@ def write_spec(out, name, frame, reference, replace, nodes, planner, warnings, n
 
 def parse_args(argv, n_positional):
     """-> (positional args, --name value or None, --replace, nest = not --no-nest, --names value or None)."""
-    name = argv[argv.index("--name") + 1] if "--name" in argv else None
-    names = argv[argv.index("--names") + 1] if "--names" in argv else None
+    known = {"--name", "--names", "--replace", "--no-nest", "--fonts-only"}
+
+    def value(flag):
+        if flag not in argv:
+            return None
+        i = argv.index(flag) + 1
+        if i >= len(argv) or argv[i].startswith("--"):
+            raise SystemExit(f"{flag} needs a value")
+        return argv[i]
+
+    unknown = [a for a in argv if a.startswith("--") and a not in known]
+    if unknown:
+        raise SystemExit(f"unknown option(s) {unknown}; known: {sorted(known)}")
+    name = value("--name")
+    names = value("--names")
     pos, skip = [], False
     for a in argv:
         if skip:

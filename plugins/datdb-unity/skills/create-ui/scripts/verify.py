@@ -15,8 +15,8 @@ from PIL import Image
 PASS = 5.0   # content-box mean; the known-good BoosterUI PSD build is 3.3 here (1.5 over the whole frame)
 
 out = os.path.abspath(sys.argv[1])
-spec = json.load(open(os.path.join(out, "spec.json")))
-rep = json.load(open(os.path.join(out, "report.json")))
+spec = json.load(open(os.path.join(out, "spec.json"), encoding="utf-8"))
+rep = json.load(open(os.path.join(out, "report.json"), encoding="utf-8"))
 if not rep.get("ok"):
     print(json.dumps({"ok": False, "errors": rep.get("errors")}, indent=1))
     sys.exit(1)

@@ -19,8 +19,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # sibling helper
 
 from PIL import Image  # noqa: E402
 
-from spec_common import (SpritePlanner, color_name, figma_gradient, load_names, parse_args, unique_name,  # noqa: E402
-                         write_spec)
+from spec_common import (SpritePlanner, color_name, figma_gradient, load_names, parse_args, safe_ui_name,  # noqa: E402
+                         unique_name, write_spec)
 
 CONTAINERS = ("FRAME", "GROUP", "COMPONENT", "COMPONENT_SET", "INSTANCE", "SECTION", "BOOLEAN_OPERATION")
 
@@ -37,9 +37,10 @@ def solid(paints):
 def main():
     pos, name, replace, nest, names_path = parse_args(sys.argv[1:], 5)
     dump_path, assets_path, ref, project, out = (os.path.abspath(p) for p in pos[:5])
-    dump = json.load(open(dump_path))
-    assets = json.load(open(assets_path))
-    name = name or dump["frame"]["name"]
+    dump = json.load(open(dump_path, encoding="utf-8"))
+    assets = json.load(open(assets_path, encoding="utf-8"))
+    nodes, warnings, used = [], [], set()
+    name = safe_ui_name(name or dump["frame"]["name"], warnings)   # Figma frame names often hold "/" or ":"
     by_id = {n["id"]: n for n in dump["nodes"]}
     kids = {}
     for n in dump["nodes"]:
@@ -52,7 +53,6 @@ def main():
         if not os.path.exists(a["file"]):
             raise SystemExit(f"assets.json: missing file {a['file']}")
     planner = SpritePlanner(project, name, sorted({a["file"] for a in assets.values()}))
-    nodes, warnings, used = [], [], set()
 
     def rect_of(n, a=None):
         r = n.get("render") if a and a["kind"] == "render" and n.get("render") else n["bbox"]

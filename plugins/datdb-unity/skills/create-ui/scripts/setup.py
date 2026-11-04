@@ -1,10 +1,11 @@
 """Step 0 of the skill, the same on Windows, macOS and Linux. Standard library only.
 
 Usage: python3 setup.py <unity_project_root>        (Windows: py -3 setup.py <root>, or python setup.py <root>)
-1. Python venv in ~/.cache/datdb-uienv (kept across sessions and projects) with psd-tools, numpy, pillow.
+1. Python venv in ~/.cache/datdb-uienv (kept across sessions and projects) with psd-tools, numpy, pillow, installed
+   from the tested version ranges in PACKAGES. The venv is (re)installed when PACKAGES changes.
 2. Copies unity/UIBuilder.cs into <root>/Assets/_Project/Editor/ when the installed copy differs in any way.
-Prints JSON: {"python": venv interpreter (run every script with it), "skill": this skill's folder,
-"uibuilder": "up-to-date" | "INSTALLED", "errors": [...]}.
+Always prints JSON (also when something fails): {"python": venv interpreter (run every script with it),
+"skill": this skill's folder, "uibuilder": "up-to-date" | "INSTALLED" | null, "errors": [...]}.
 """
 import filecmp
 import json
@@ -13,9 +14,12 @@ import shutil
 import subprocess
 import sys
 
-PACKAGES = ["psd-tools>=1.9", "numpy", "pillow"]
+# Tested: psd-tools 1.11.0, numpy 2.0.2, pillow 11.3.0 (Python 3.9). psd-tools is held to one minor version because
+# the scripts read its internals (tagged blocks, engine data); numpy / pillow only to their next major version.
+PACKAGES = ["psd-tools>=1.11,<1.12", "numpy>=1.24,<3", "pillow>=10,<13"]
 SKILL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VENV = os.path.join(os.path.expanduser("~"), ".cache", "datdb-uienv")
+MARKER = os.path.join(VENV, "datdb-packages.txt")   # the PACKAGES list the venv was installed with
 
 
 def venv_python():
@@ -24,15 +28,35 @@ def venv_python():
     return os.path.join(VENV, "bin", "python")
 
 
+def tail(r):
+    return ((r.stderr or "") + (r.stdout or "")).strip()[-800:]
+
+
 def ensure_venv(errors):
     py = venv_python()
     if not os.path.exists(py):
-        subprocess.run([sys.executable, "-m", "venv", VENV], check=True)
-    ok = subprocess.run([py, "-c", "import psd_tools, numpy, PIL"], capture_output=True).returncode == 0
-    if not ok:
-        r = subprocess.run([py, "-m", "pip", "install", "-q", *PACKAGES], capture_output=True, text=True)
+        r = subprocess.run([sys.executable, "-m", "venv", VENV], capture_output=True, text=True)
+        if r.returncode != 0 or not os.path.exists(py):
+            hint = (" On Debian/Ubuntu install the venv module first: sudo apt install python3-venv."
+                    if sys.platform.startswith("linux") else "")
+            errors.append(f"creating the venv {VENV} failed: {tail(r)}.{hint} Then delete {VENV} and run setup again.")
+            return None
+    want = "\n".join(PACKAGES)
+    try:
+        with open(MARKER, encoding="utf-8") as fh:
+            have = fh.read().strip()
+    except OSError:
+        have = None
+    importable = subprocess.run([py, "-c", "import psd_tools, numpy, PIL"], capture_output=True).returncode == 0
+    if have != want or not importable:
+        r = subprocess.run([py, "-m", "pip", "install", "-q", "--disable-pip-version-check", *PACKAGES],
+                           capture_output=True, text=True)
         if r.returncode != 0:
-            errors.append("pip install failed: " + (r.stderr or r.stdout)[-800:])
+            errors.append(f"pip install failed: {tail(r)}. If the venv is broken (no pip), delete {VENV} and run "
+                          f"setup again.")
+            return py.replace("\\", "/")
+        with open(MARKER, "w", encoding="utf-8") as fh:
+            fh.write(want)
     return py.replace("\\", "/")   # Git Bash and C# strings take forward slashes on Windows too
 
 
@@ -50,12 +74,20 @@ def ensure_uibuilder(root, errors):
 
 
 def main():
-    if sys.version_info < (3, 9):
-        raise SystemExit(f"Python 3.9+ needed, this is {sys.version.split()[0]}")
-    root = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else ".")
     errors = []
-    py = ensure_venv(errors)
-    status = ensure_uibuilder(root, errors)
+    py = status = None
+    if sys.version_info < (3, 9):
+        errors.append(f"Python 3.9+ needed, this is {sys.version.split()[0]}")
+    else:
+        root = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else ".")
+        try:
+            py = ensure_venv(errors)
+        except Exception as ex:   # never die without the JSON the skill reads
+            errors.append(f"venv setup failed: {ex!r}")
+        try:
+            status = ensure_uibuilder(root, errors)
+        except Exception as ex:
+            errors.append(f"installing UIBuilder.cs failed: {ex!r}")
     print(json.dumps({"python": py, "skill": SKILL.replace("\\", "/"), "uibuilder": status, "errors": errors}, indent=1))
 
 

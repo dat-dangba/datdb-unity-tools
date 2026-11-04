@@ -15,19 +15,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # sibling helper
 
 from PIL import Image  # noqa: E402
 
-from spec_common import UI_ROOT, SpritePlanner, load_names, parse_args, write_spec  # noqa: E402
+from spec_common import UI_ROOT, SpritePlanner, load_names, parse_args, safe_ui_name, write_spec  # noqa: E402
 
 
 def main():
     pos, name, replace, nest, names_path = parse_args(sys.argv[1:], 3)
     layout_path, project, out = (os.path.abspath(p) for p in pos[:3])
-    data = json.load(open(layout_path))
+    data = json.load(open(layout_path, encoding="utf-8"))
     ref = data["reference"]
-    name = name or os.path.splitext(os.path.basename(ref))[0]
+    nodes, warnings, errors = [], [], []
+    name = safe_ui_name(name or os.path.splitext(os.path.basename(ref))[0], warnings)
     ui_root = os.path.join(project, UI_ROOT) + os.sep
 
     planner = SpritePlanner(project, name, [])   # nothing to dedupe; only the Common/ move rule is used
-    nodes, warnings, errors = [], [], []
     for L in data["layout"]:
         if L.get("type") in ("text", "group"):
             nodes.append({"parent": "", "visible": True, **L})

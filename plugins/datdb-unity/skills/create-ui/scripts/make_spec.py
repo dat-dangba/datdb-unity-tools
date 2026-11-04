@@ -17,8 +17,8 @@ from psd_tools import PSDImage  # noqa: E402
 
 import psd_export  # noqa: E402
 import psd_inspect  # noqa: E402
-from spec_common import (SHADOW, SpritePlanner, color_name, load_names, parse_args, ps_drop_shadow,  # noqa: E402
-                         ps_gradient_overlay, unique_name, write_spec)
+from spec_common import (SHADOW, SpritePlanner, color_name, load_names, parse_args, ps_align, ps_drop_shadow,  # noqa: E402
+                         ps_gradient_overlay, safe_ui_name, unique_name, write_spec)
 
 
 def fonts_only(psd_path):
@@ -43,7 +43,8 @@ def main():
         return fonts_only(os.path.abspath(parse_args(sys.argv[1:], 1)[0][0]))
     pos, name, replace, nest, names_path = parse_args(sys.argv[1:], 3)
     psd_path, project, out = (os.path.abspath(p) for p in pos[:3])
-    name = name or os.path.splitext(os.path.basename(psd_path))[0]
+    warnings, nodes, used = [], [], set()
+    name = safe_ui_name(name or os.path.splitext(os.path.basename(psd_path))[0], warnings)
 
     psd = PSDImage.open(psd_path)
     tree = []
@@ -53,7 +54,6 @@ def main():
     for e in items:
         exported.setdefault(e["path"], []).append(e)
     planner = SpritePlanner(project, name, [e["file"] for e in items if "file" in e and not e["empty"]])
-    warnings, nodes, used = [], [], set()
 
     def walk(layers, parent):
         for l in layers:
@@ -77,9 +77,16 @@ def main():
                         "text": t["text"], "font": r0["font"], "size": round(r0["size"] * sc, 3),
                         "leading": 0 if r0["auto_leading"] or not r0["leading"] else round(r0["leading"] * sc, 3),
                         "color": [fill["r"], fill["g"], fill["b"], round(fill["a"] * 255)],
-                        "align": {0: "left", 1: "right"}.get(t["justification"], "center"), "place": "baseline",
+                        "align": ps_align(t["justification"], path, warnings), "place": "baseline",
                         "anchor_x": t["anchor_x"], "baseline_y": t["baseline_y"],
                         "x": l["bbox"][0], "y": l["bbox"][1], "w": l["bbox"][2] - l["bbox"][0], "h": l["bbox"][3] - l["bbox"][1]}
+                if t.get("box"):   # paragraph text: wrap inside the Photoshop box, laid out from its top
+                    bx, by, bw, bh = (round(v, 2) for v in t["box"])
+                    node.update(place="rect", wrap=True, x=bx, y=by, w=bw, h=bh)
+                    warnings.append(f"{path}: paragraph text wrapped by TMP inside its {bw}x{bh} box; line breaks can "
+                                    f"differ from Photoshop, compare the render")
+                if t.get("transformed"):
+                    warnings.append(f"{path}: rotated / skewed / stretched text built upright at scale {round(sc, 3)}; compare the render")
                 if r0.get("tracking"):
                     warnings.append(f"{path}: tracking {r0['tracking']} ignored")
                 for fx in l["effects"]:

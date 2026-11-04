@@ -1,5 +1,6 @@
 // Installed by the create-ui skill (plugin datdb-unity, skills/create-ui/unity/UIBuilder.cs). Edit that
-// template and bump Version; the skill's setup.py re-copies it into Assets/_Project/Editor/ whenever the files differ.
+// template, not the installed copy: the skill's setup.py re-copies it into Assets/_Project/Editor/ whenever the bytes
+// differ. Version is informational only (shown in report.log); bump it with every change so builds can be traced.
 //
 // One call builds a whole uGUI screen from a spec.json (format: reference/spec.md in the skill) and saves it as a
 // prefab in prefab_dir. CheckFonts(...) runs the font step alone, so a missing font stops the skill before any export work.
@@ -23,7 +24,7 @@ namespace DatdbUI
 {
     public static class UIBuilder
     {
-        public const int Version = 7;
+        public const int Version = 8;
 
         [Serializable] public class Move { public string from; public string to; }
 
@@ -33,6 +34,7 @@ namespace DatdbUI
             public string name, parent, type;          // type: group | image | text
             public float x, y, w, h;                   // design px, top-left of the frame
             public bool stretch, visible, empty, button;
+            public bool wrap;                          // text: wrap inside w (PSD paragraph text), top aligned
             public string sprite;                      // Assets/... path
             public float[] tint, shadow;               // tint rgba 0-255; shadow [dx, dyDown, r, g, b, a(0-1)]
             public float[] slice;                      // sprite border [left, bottom, right, top] px -> Image Type Sliced
@@ -97,10 +99,14 @@ namespace DatdbUI
             }));
         }
 
+        // Stable order, so the same key always picks the same asset: main assets before "... Fallback" ones, then by path.
         static List<TMP_FontAsset> FontAssets()
         {
             return AssetDatabase.FindAssets("t:TMP_FontAsset")
-                .Select(g => AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(AssetDatabase.GUIDToAssetPath(g)))
+                .Select(AssetDatabase.GUIDToAssetPath)
+                .OrderBy(p => Path.GetFileName(p).IndexOf("fallback", StringComparison.OrdinalIgnoreCase) >= 0)
+                .ThenBy(p => p, StringComparer.Ordinal)
+                .Select(p => AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(p))
                 .Where(f => f != null).ToList();
         }
 
@@ -126,6 +132,11 @@ namespace DatdbUI
             }
             catch (Exception e) { rep.errors.Add(e.ToString()); }
             rep.ok = rep.errors.Count == 0;
+            // Validation errors change nothing; a failure after it does not roll back what was already done.
+            var done = rep.sprites_moved.Concat(rep.sprites_imported).Concat(rep.sprites_sliced).Concat(rep.materials_created).ToList();
+            if (!rep.ok && done.Count > 0)
+                rep.errors.Add("PARTIAL: these changes were made before the error and were NOT rolled back: " + string.Join("; ", done));
+            rep.log.Add("UIBuilder version " + Version);
             string json = JsonUtility.ToJson(rep, true);
             if (spec != null && !string.IsNullOrEmpty(spec.out_dir))
             {
@@ -145,6 +156,11 @@ namespace DatdbUI
 
         static void Run(Spec s, Report rep)
         {
+            if (s.frame == null || s.frame.Length < 2 || s.frame[0] <= 0 || s.frame[1] <= 0)
+            {
+                rep.errors.Add("spec.frame must be [width, height] > 0");
+                return;
+            }
             FW = s.frame[0]; FH = s.frame[1];
             string fontsDir = Or(s.fonts_dir, "Assets/_Project/Fonts");
             string uiRoot = Or(s.ui_root, "Assets/_Project/Images/UI");
@@ -168,20 +184,36 @@ namespace DatdbUI
                 if (okDisk) rep.sprites_moved.Add(m.from + " -> " + m.to);
                 else { rep.errors.Add("move failed " + m.from + " -> " + m.to + " " + err); return; }
             }
-            foreach (var ns in s.new_sprites ?? new Move[0])
+            // new sprites: copy all, import them in ONE batch, set the sprite settings, reimport in ONE batch
+            var news = s.new_sprites ?? new Move[0];
+            foreach (var ns in news)
             {
                 EnsureFolder(Path.GetDirectoryName(ns.to).Replace('\\', '/'));
                 if (File.Exists(ns.to)) rep.warnings.Add("overwrote " + ns.to);
                 File.Copy(ns.from, ns.to, true);
-                AssetDatabase.ImportAsset(ns.to, ImportAssetOptions.ForceSynchronousImport);
-                var ti = (TextureImporter)AssetImporter.GetAtPath(ns.to);
-                ti.textureType = TextureImporterType.Sprite;
-                ti.spriteImportMode = SpriteImportMode.Single;
-                ti.mipmapEnabled = false;
-                ti.alphaIsTransparency = true;
-                ti.SaveAndReimport();
-                if (AssetDatabase.LoadAssetAtPath<Sprite>(ns.to)) rep.sprites_imported.Add(ns.to);
-                else { rep.errors.Add("import failed " + ns.to); return; }
+            }
+            if (news.Length > 0)
+            {
+                Batch(() => { foreach (var ns in news) AssetDatabase.ImportAsset(ns.to); });
+                Batch(() =>
+                {
+                    foreach (var ns in news)
+                    {
+                        var ti = AssetImporter.GetAtPath(ns.to) as TextureImporter;
+                        if (ti == null) continue;   // reported below
+                        ti.textureType = TextureImporterType.Sprite;
+                        ti.spriteImportMode = SpriteImportMode.Single;
+                        ti.mipmapEnabled = false;
+                        ti.alphaIsTransparency = true;
+                        int need = MaxSizeFor(ns.to);
+                        if (need > ti.maxTextureSize) ti.maxTextureSize = need;   // never downscale a design image
+                        ti.SaveAndReimport();
+                    }
+                });
+                foreach (var ns in news)
+                    if (AssetDatabase.LoadAssetAtPath<Sprite>(ns.to)) rep.sprites_imported.Add(ns.to);
+                    else rep.errors.Add("import failed " + ns.to);
+                if (rep.errors.Count > 0) return;
             }
 
             // 2b. 9-slice borders (the Sprite Editor border), set once per sprite; a different existing border is kept
@@ -201,7 +233,16 @@ namespace DatdbUI
                     rep.warnings.Add(g.Key + " keeps its border " + ti.spriteBorder + " (spec wants " + want + "); check the Sliced render");
             }
 
-            foreach (var f in fontMap.Values) MakeReadable(f);
+            // reused sprites whose importer would downscale them (Max Size below the image size)
+            foreach (var sp in nodes.Where(n => n.type == "image" && !n.empty && !string.IsNullOrEmpty(n.sprite)).Select(n => n.sprite).Distinct())
+            {
+                var ti = AssetImporter.GetAtPath(sp) as TextureImporter;
+                int need = MaxSizeFor(sp);
+                if (ti != null && need > ti.maxTextureSize)
+                    rep.warnings.Add(sp + ": importer Max Size " + ti.maxTextureSize + " is smaller than the image (needs " + need + "); Unity downscales it. Not changed (shared sprite): raise it by hand if it looks blurry");
+            }
+
+            foreach (var f in fontMap.Values.Distinct()) MakeReadable(f, rep);
 
             // 3. hierarchy in a preview scene: TMP layout and renders need a live canvas, the open scene stays untouched
             var scene = EditorSceneManager.NewPreviewScene();
@@ -359,7 +400,7 @@ namespace DatdbUI
                         t.enableVertexGradient = true;
                         t.colorGradient = new VertexGradient(corner(0), corner(4), corner(8), corner(12));
                     }
-                    t.textWrappingMode = TextWrappingModes.NoWrap;
+                    t.textWrappingMode = n.wrap ? TextWrappingModes.Normal : TextWrappingModes.NoWrap;
                     t.overflowMode = TextOverflowModes.Overflow;
                     t.raycastTarget = false;
                     if (n.leading > 0)
@@ -370,11 +411,16 @@ namespace DatdbUI
                     if (n.place == "rect")
                     {
                         Place(rt, n.x, n.y, n.w, n.h, p);
-                        t.alignment = Align(n.align, false);
+                        // paragraph text lays out from the top of its box, like Photoshop; Fit re-centres it after
+                        t.alignment = n.wrap ? AlignTop(n.align) : Align(n.align, false);
                     }
                     else
                     {
-                        Place(rt, n.anchor_x - 400, n.baseline_y, 800, 0, p);
+                        // Photoshop point text: anchor_x is the LEFT edge (left), the centre (center) or the RIGHT
+                        // edge (right) of the line, so the temporary rect must start, centre or end there
+                        const float W = 4000f;
+                        float left = n.align == "left" ? n.anchor_x : n.align == "right" ? n.anchor_x - W : n.anchor_x - W / 2f;
+                        Place(rt, left, n.baseline_y, W, 0, p);
                         t.alignment = Align(n.align, true);
                     }
                     texts.Add(new BuiltText { path = path, node = n, t = t });
@@ -479,6 +525,11 @@ namespace DatdbUI
             }
         }
 
+        static TextAlignmentOptions AlignTop(string a)
+        {
+            return a == "left" ? TextAlignmentOptions.TopLeft : a == "right" ? TextAlignmentOptions.TopRight : TextAlignmentOptions.Top;
+        }
+
         static void Fit(TextMeshProUGUI t, TextAlignmentOptions final)
         {
             t.ForceMeshUpdate(true);
@@ -525,7 +576,7 @@ namespace DatdbUI
             AssetDatabase.CreateFolder(parent, Path.GetFileName(path));
         }
 
-        static void MakeReadable(TMP_FontAsset f)
+        static void MakeReadable(TMP_FontAsset f, Report rep)
         {
             var tex = f.atlasTexture;
             if (tex == null || tex.isReadable) return;
@@ -533,6 +584,40 @@ namespace DatdbUI
             so.FindProperty("m_IsReadable").boolValue = true;
             so.ApplyModifiedProperties();
             AssetDatabase.SaveAssets();
+            rep.warnings.Add("font " + AssetDatabase.GetAssetPath(f) + ": atlas texture set to Read/Write (needed by the dynamic atlas); this changed the font asset");
+        }
+
+        static void Batch(Action a)
+        {
+            AssetDatabase.StartAssetEditing();
+            try { a(); }
+            finally { AssetDatabase.StopAssetEditing(); }
+        }
+
+        // Image size from the PNG header (no texture load); (0, 0) when the file is not a PNG.
+        internal static Vector2Int PngSize(string path)
+        {
+            try
+            {
+                using (var fs = File.OpenRead(path))
+                {
+                    var b = new byte[24];
+                    if (fs.Read(b, 0, 24) < 24 || b[0] != 0x89 || b[1] != 0x50 || b[2] != 0x4E || b[3] != 0x47) return Vector2Int.zero;
+                    return new Vector2Int((b[16] << 24) | (b[17] << 16) | (b[18] << 8) | b[19], (b[20] << 24) | (b[21] << 16) | (b[22] << 8) | b[23]);
+                }
+            }
+            catch (IOException) { return Vector2Int.zero; }
+        }
+
+        // The smallest importer Max Size (power of two, 32..16384) that keeps the image at full size; 0 = unknown.
+        static int MaxSizeFor(string path)
+        {
+            var sz = PngSize(path);
+            int m = Mathf.Max(sz.x, sz.y);
+            if (m <= 0) return 0;
+            int p = 32;
+            while (p < m && p < 16384) p *= 2;
+            return p;
         }
 
         // "Outside" stroke: outward = 2 * width * ratioA * gradientScale texels; dilate == width keeps the face size.

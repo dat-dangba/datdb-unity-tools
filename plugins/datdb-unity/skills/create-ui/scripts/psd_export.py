@@ -13,6 +13,11 @@ import sys
 from psd_tools import PSDImage
 
 
+def file_md5(path):
+    with open(path, "rb") as fh:
+        return hashlib.md5(fh.read()).hexdigest()
+
+
 def safe(name):
     return re.sub(r"[^A-Za-z0-9_\-]+", "_", name).strip("_") or "layer"
 
@@ -58,7 +63,7 @@ def export(psd, out):
             items.append({
                 "name": l.name, "path": p, "file": fp, "bbox": list(l.bbox), "size": list(img.size),
                 "visible": bool(l.visible), "empty": alpha_max == 0, "note": note,
-                "md5": hashlib.md5(open(fp, "rb").read()).hexdigest(),
+                "md5": file_md5(fp),
             })
 
     walk(psd)

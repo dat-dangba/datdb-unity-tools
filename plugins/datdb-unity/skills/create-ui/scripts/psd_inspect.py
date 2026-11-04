@@ -132,14 +132,27 @@ def text_info(layer):
         })
     just = ed["ParagraphRun"]["RunArray"][0]["ParagraphSheet"]["Properties"].get("Justification", 0)
     xx, xy, yx, yy, tx, ty = (float(v) for v in layer.transform)
-    return {
+    info = {
         "text": layer.text.replace("\r", "\n"),
         "runs": runs,
-        # 0 left, 1 right, 2 center
+        # 0 left, 1 right, 2 center, 3-5 justify (last line left / right / center), 6 justify all
         "justification": int(just),
         # Photoshop point text: (tx, ty) is the anchor x and the FIRST baseline; scale multiplies font size
         "anchor_x": tx, "baseline_y": ty, "scale": yy,
+        # rotation / skew / non-uniform scale is not built (only yy is used as the font scale)
+        "transformed": abs(xy) > 1e-3 or abs(yx) > 1e-3 or abs(xx - yy) > 1e-3 * max(1.0, abs(yy)),
+        "box": None,
     }
+    # Paragraph (box) text: (tx, ty) is the box origin, NOT a baseline. BoxBounds = [left, top, right, bottom] in
+    # text space; Photoshop wraps the lines inside it and lays them out from the top.
+    try:
+        shape = ed["Rendered"]["Shapes"]["Children"][0]
+        if int(shape.get("ShapeType", 0)) == 1:
+            x0, y0, x1, y1 = (float(v) for v in shape["Cookie"]["Photoshop"]["BoxBounds"])
+            info["box"] = [tx + xx * x0, ty + yy * y0, xx * (x1 - x0), yy * (y1 - y0)]
+    except (KeyError, IndexError, TypeError, ValueError):
+        pass
+    return info
 
 
 def walk(layers, out, path="", global_angle=None):

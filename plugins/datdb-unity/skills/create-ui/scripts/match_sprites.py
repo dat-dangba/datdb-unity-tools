@@ -57,7 +57,8 @@ def sprites(root):
 
 
 def md5(path):
-    return hashlib.md5(open(path, "rb").read()).hexdigest()
+    with open(path, "rb") as fh:
+        return hashlib.md5(fh.read()).hexdigest()
 
 
 def resized(arr, scale):
@@ -206,7 +207,7 @@ def sprite_index(root):
     """{path: slice_info + "key"} for every sprite under root. Only files whose size/mtime changed are read again."""
     path = index_path(root)
     try:
-        with open(path) as fh:
+        with open(path, encoding="utf-8") as fh:
             old = json.load(fh)
         old = old.get("sprites", {}) if old.get("version") == INDEX_VERSION else {}
     except (OSError, ValueError):
@@ -222,7 +223,7 @@ def sprite_index(root):
     if new != old:
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path + ".tmp", "w") as fh:
+            with open(path + ".tmp", "w", encoding="utf-8") as fh:
                 json.dump({"version": INDEX_VERSION, "sprites": new}, fh)
             os.replace(path + ".tmp", path)
         except OSError:
@@ -424,7 +425,7 @@ def compose(ref_path, layout_path, out_dir, refine):
     os.makedirs(out_dir, exist_ok=True)
     rgb = flatten(load(ref_path))
     H, W = rgb.shape[:2]
-    layout = json.load(open(layout_path))
+    layout = json.load(open(layout_path, encoding="utf-8"))
     layers, passthrough = [], {}
     for i, L in enumerate(layout):
         if L.get("type") in ("text", "group"):
@@ -471,7 +472,7 @@ def compose(ref_path, layout_path, out_dir, refine):
     out = [{k: v for k, v in L.items() if k != "_s"} for L in layers]
     for i in sorted(passthrough):   # back in their original order
         out.insert(i, passthrough[i])
-    with open(os.path.join(out_dir, "_layout.json"), "w") as f:
+    with open(os.path.join(out_dir, "_layout.json"), "w", encoding="utf-8") as f:
         json.dump({"reference": os.path.abspath(ref_path), "layout": out}, f, ensure_ascii=False, indent=1)
     report(rgb, render(), out_dir, {"layout": out})
 

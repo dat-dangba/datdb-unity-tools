@@ -16,8 +16,14 @@ Chạy được trên macOS, Linux và Windows.
 | Unity 6 + Unity MCP | Package `com.unity.ai.assistant` (đã test với 2.21.0-pre.2, Unity 6000.0.71f1). Bật MCP server trong Edit → Project Settings → AI → Unity MCP Server và kết nối với Claude Code. Skill chỉ cần 2 tool mặc định: `Unity_RunCommand`, `Unity_GetConsoleLogs`. |
 | Figma MCP | Chỉ khi dựng từ link Figma (plugin `figma` của Claude Code). |
 
-Lần chạy đầu, skill tự tạo venv `~/.cache/datdb-uienv` (psd-tools, numpy, pillow; khoảng 1 phút) và tự copy
-`UIBuilder.cs` vào `Assets/_Project/Editor/` của project. Không cần làm tay.
+Lần chạy đầu, skill tự tạo venv `~/.cache/datdb-uienv` (psd-tools 1.11.x, numpy, pillow trong các khoảng phiên bản đã
+test; khoảng 1 phút) và tự copy `UIBuilder.cs` vào `Assets/_Project/Editor/` của project. Không cần làm tay. Khi danh
+sách gói trong `setup.py` đổi, venv tự cài lại. Venv hỏng thì xoá thư mục `~/.cache/datdb-uienv` rồi chạy lại. Trên
+Debian/Ubuntu cần gói `python3-venv`.
+
+Skill tự cho phép sẵn các tool chỉ đọc (`Unity_GetConsoleLogs`, các tool đọc của Figma), nên bớt bị hỏi quyền.
+`Unity_RunCommand` chạy C# tuỳ ý nên vẫn hỏi mỗi lần. Muốn bỏ hỏi thì tự thêm nó vào permission allow của project.
+Tên tool phụ thuộc tên MCP server: skill giả định server Unity tên `unity-mcp`.
 
 ## Cấu trúc project Unity
 
@@ -56,9 +62,13 @@ Cập nhật khi có bản mới:
 /plugin marketplace update datdb-unity-tools
 ```
 
-Người sửa plugin: tăng `version` trong `plugins/datdb-unity/.claude-plugin/plugin.json` (và trong
-`.claude-plugin/marketplace.json`) mỗi lần push bản mới. Muốn thử trước khi push:
-`/plugin marketplace add <đường dẫn tới thư mục này>`.
+Người sửa plugin:
+- Tăng `version` trong `plugins/datdb-unity/.claude-plugin/plugin.json` mỗi lần push bản mới. Chỉ khai báo version
+  ở đây (không ghi vào `marketplace.json`) để hai nơi không lệch nhau. Ghi thay đổi vào `CHANGELOG.md`.
+- Sửa `unity/UIBuilder.cs` thì tăng `UIBuilder.Version`.
+- Chạy test trước khi push (chỉ cần venv của skill):
+  `~/.cache/datdb-uienv/bin/python -I -B plugins/datdb-unity/skills/create-ui/tests/run_tests.py`
+- Muốn thử trước khi push: `/plugin marketplace add <đường dẫn tới thư mục này>`.
 
 ## Cách dùng
 
@@ -71,7 +81,9 @@ chọn skill (trong danh sách có thể hiện là `datdb-unity:create-ui`), k�
 /create-ui Mockups/ShopUI.png
 ```
 
-- Prefab đã tồn tại: skill hỏi ghi đè (`--replace`, giữ GUID) hay đặt tên khác (`--name X`).
+- Prefab đã tồn tại: skill hỏi ghi đè (`--replace`) hay đặt tên khác (`--name X`). Ghi đè giữ GUID của prefab nhưng
+  dựng lại toàn bộ cây con, nên script, onClick và chỉnh sửa tay trong prefab bị mất, override trong scene và tham
+  chiếu tới object con cũng hỏng.
 - Đổi tên layer cho chuẩn (PascalCase + hậu tố loại: `PopupFrame`, `TitleText`, `CloseButton`…): đặt file
   `<Tên>.names.json` cạnh PSD/PNG, ví dụ `{"Group 5": "PopupFrame", "Are you sure?": "TitleText"}`.
 - Layer nằm trong layer khác sẽ tự thành con của nó (tắt bằng `--no-nest`).
