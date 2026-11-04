@@ -34,7 +34,7 @@ frame's top-left, whatever the parent is.
 | type | fields |
 |---|---|
 | `group` | `stretch: true` (fills its parent), or `x, y, w, h` |
-| `image` | `sprite` (Assets path), `x, y, w, h`, `button` (adds `Button` and raycast), `empty` (disabled Image), optional `tint`, optional `shadow: [dx, dyDown, r, g, b, alpha0-1]`, optional `slice: [left, bottom, right, top]` (sprite border px → Image Type Sliced) |
+| `image` | `sprite` (Assets path), `x, y, w, h`, `button` (adds `Button` and raycast; the spec writers set it for every image whose name, after the rename map, contains `button`), `empty` (disabled Image), optional `tint`, optional `shadow: [dx, dyDown, r, g, b, alpha0-1]`, optional `slice: [left, bottom, right, top]` (sprite border px → Image Type Sliced) |
 | `text` | `text`, `font`, `size`, `color`, `leading` (px; 0 = font default), `align` (`left`/`center`/`right`), `place`, optional `stroke_px`, `stroke_color`, `stroke_name` (the color word in the material name: Green, Orange…) |
 
 Text placement:
