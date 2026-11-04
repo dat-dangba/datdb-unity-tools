@@ -19,7 +19,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # sibling helper
 
 from PIL import Image  # noqa: E402
 
-from spec_common import SpritePlanner, color_name, load_names, parse_args, unique_name, write_spec  # noqa: E402
+from spec_common import (SpritePlanner, color_name, figma_gradient, load_names, parse_args, unique_name,  # noqa: E402
+                         write_spec)
 
 CONTAINERS = ("FRAME", "GROUP", "COMPONENT", "COMPONENT_SET", "INSTANCE", "SECTION", "BOOLEAN_OPERATION")
 
@@ -111,8 +112,27 @@ def main():
             node.update(stroke_px=n["strokeWeight"], stroke_color=st["color"] + [round(255 * st.get("opacity", 1))],
                         stroke_name=color_name(st["color"]))
         for e in n.get("effects", []):
-            if e.get("visible", True):
-                warnings.append(f"{nm}: text effect {e['type']} not built")
+            if not e.get("visible", True):
+                continue
+            if e["type"] == "DROP_SHADOW" and "underlay" not in node:
+                c = e.get("color") or [0, 0, 0, 0.25]
+                node["underlay"] = [e["offset"][0], e["offset"][1], c[0], c[1], c[2], c[3],
+                                    e.get("radius") or 0, max(0, e.get("spread") or 0)]
+                node["underlay_name"] = color_name(c[:3])
+                if (e.get("spread") or 0) < 0:
+                    warnings.append(f"{nm}: negative shadow spread {e['spread']} built as 0")
+            else:
+                warnings.append(f"{nm}: text effect {e['type']} not built (TMP: only one drop shadow)")
+        fills = [p for p in n.get("fills") or [] if isinstance(p, dict) and p.get("visible", True)]
+        top = fills[-1] if fills else None
+        if top and top["type"].startswith("GRADIENT_"):
+            below = solid(fills[:-1])
+            base = below["color"] + [round(255 * below.get("opacity", 1) * n.get("opacity", 1))] if below else None
+            node["gradient"], node["color"] = figma_gradient(top, base, nm, warnings)
+            if not base and n.get("opacity", 1) < 1:
+                node["color"][3] = round(255 * n["opacity"])
+        elif top and top["type"] != "SOLID":
+            warnings.append(f"{nm}: text fill {top['type']} not built (solid color used)")
         return node
 
     def emit(n, parent):

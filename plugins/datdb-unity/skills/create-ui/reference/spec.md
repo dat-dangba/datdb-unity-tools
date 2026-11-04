@@ -35,7 +35,7 @@ frame's top-left, whatever the parent is.
 |---|---|
 | `group` | `stretch: true` (fills its parent), or `x, y, w, h` |
 | `image` | `sprite` (Assets path), `x, y, w, h`, `button` (adds `Button` and raycast; the spec writers set it for every image whose name, after the rename map, contains `button`), `empty` (disabled Image), optional `tint`, optional `shadow: [dx, dyDown, r, g, b, alpha0-1]`, optional `slice: [left, bottom, right, top]` (sprite border px → Image Type Sliced) |
-| `text` | `text`, `font`, `size`, `color`, `leading` (px; 0 = font default), `align` (`left`/`center`/`right`), `place`, optional `stroke_px`, `stroke_color`, `stroke_name` (the color word in the material name: Green, Orange…) |
+| `text` | `text`, `font`, `size`, `color`, `leading` (px; 0 = font default), `align` (`left`/`center`/`right`), `place`, optional `stroke_px`, `stroke_color`, `stroke_name` (the color word in the material name: Green, Orange…), optional `underlay: [dx, dyDown, r, g, b, alpha0-1, blur_px, dilate_px]` + `underlay_name`, optional `gradient` (16 numbers: TL, TR, BL, BR corners as `[r, g, b, a]` 0–255) |
 
 Text placement:
 - `"place": "baseline"`: uses `anchor_x` and `baseline_y` (PSD point text). Multiply size and leading by the PSD
@@ -69,6 +69,28 @@ UIBuilder adds a warning. Ask the user before raising the padding.
 
 Shadow: Figma `0 4 2 rgba(40,20,42,.52)` → `[0, 4, 40, 20, 42, 0.52]`.
 
+Text drop shadow → `underlay` (material Underlay, `UNDERLAY_ON`), in the same material as the outline:
+`"<font asset> Underlay <underlay_name>.mat"` or `"<font asset> Outline <stroke_name> Underlay <underlay_name>.mat"`.
+- PSD Drop Shadow: offset from angle (or the global light) and distance, `dx = -d·cos(a)`, `dyDown = d·sin(a)`;
+  spread % turns that part of the size into `dilate_px`, the rest is `blur_px`. Blend other than Normal (or Multiply
+  with a dark color) is warned. psd_inspect reads effects from the raw `lfx2` descriptor because psd-tools'
+  `layer.effects` drops effects without the `present` key.
+- Figma `DROP_SHADOW`: `offset`, `radius` → `blur_px`, `spread` → `dilate_px`.
+- TMP keeps underlay + outline + bold reserve inside the atlas padding (ratio C). UIBuilder keeps the offset first,
+  then drops the dilate, then the blur, and warns when the built offset is still shorter than the design.
+
+Text gradient → `gradient` (`enableVertexGradient` + `colorGradient`), the node `color` becomes white with the
+layer's alpha so the corners are the final colors.
+- PSD Gradient Overlay: the corners are sampled along the angle across the text bbox (scale, reverse, opacity
+  over the fill, color + opacity stops). Non-linear styles, non-Normal blends, noise gradients and more than two
+  stops are warned (only the 4 corners exist).
+- Figma `GRADIENT_*` top fill: the corners come from `gradientTransform` (unit box → gradient space), composited
+  over a solid fill under it.
+- TMP applies the 4 corners to every glyph, not to the whole text block, so a vertical gradient restarts on each
+  letter. The spec writers always warn so the render gets compared.
+
+Other text effects are never built; the spec writers list them in `warnings`.
+
 ## Variants
 
 Each variant hides some nodes and shows others, then renders `render_<name>.png`. UIBuilder restores the original
@@ -82,11 +104,11 @@ same kind where exactly one is visible.
 |---|---|
 | `ok`, `errors` | Everything is validated BEFORE anything changes: fonts (`MISSING font: …`), the prefab name (`EXISTS: …`), parents listed before children, node types, sizes, every sprite (existing, or arriving through `new_sprites` / `move_to_common`, never a path that `move_to_common` moves away), sprite sources on disk and variant paths. |
 | `prefab` | The saved prefab path (checked on disk). |
-| `warnings` | Empty layers, texts that shrink below their design size, stroke wider than the padding, duplicate paths. |
+| `warnings` | Empty layers, texts that shrink below their design size, stroke wider than the padding, drop shadows shortened or simplified by the padding, duplicate paths. |
 | `sprites_sliced` | Sprites whose importer border was set (checked on the reloaded sprite). |
 | `sprites_moved`, `sprites_imported`, `materials_created`, `materials_reused` | What changed. Each entry is checked on disk before it is listed. |
-| `texts[]` | `path`, `design`, `rendered` size, `rect` in frame px, `stroke_px`, `visible`. |
-| `renders[]` | `render.png`, `render_2x.png` (only when there are strokes), `render_<variant>.png`. |
+| `texts[]` | `path`, `design`, `rendered` size, `rect` in frame px, `stroke_px`, `underlay`, `gradient`, `visible`. |
+| `renders[]` | `render.png`, `render_2x.png` (only when there are strokes, shadows or gradients), `render_<variant>.png`. |
 
 ## Notes
 

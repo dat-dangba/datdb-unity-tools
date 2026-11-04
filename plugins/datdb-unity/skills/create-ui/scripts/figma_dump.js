@@ -14,6 +14,10 @@ const paints = (ps) => (Array.isArray(ps) ? ps.map((p) => {
   if (p.opacity !== undefined && p.opacity !== 1) d.opacity = r2(p.opacity);
   if (p.color) d.color = rgb(p.color);
   if (p.imageHash) { d.imageHash = p.imageHash; d.scaleMode = p.scaleMode; }
+  if (p.gradientStops) {   // [position, r, g, b, a0-1]; transform maps the node's unit box to gradient space
+    d.stops = p.gradientStops.map((s) => [r2(s.position)].concat(rgb(s.color), [r2(s.color.a)]));
+    d.transform = p.gradientTransform.map((row) => row.map((v) => Math.round(v * 10000) / 10000));
+  }
   return d;
 }) : "mixed");
 const box = (b) => (b ? [r2(b.x - fb.x), r2(b.y - fb.y), r2(b.width), r2(b.height)] : null);

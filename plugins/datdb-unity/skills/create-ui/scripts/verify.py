@@ -3,7 +3,7 @@
 Usage: python -I verify.py <out_dir>        (reads spec.json + report.json written there)
 Prints JSON: mean diff over the content box (where the reference or the render has ink; the white margin would
 dilute it), pass (content mean <= PASS), sheet paths, text warnings.
-Look at sheet.png always; strokes.png when there are outlined texts; heatmap.png only when it fails.
+Look at sheet.png always; strokes.png when there are outlined / shadowed / gradient texts; heatmap.png only when it fails.
 """
 import json
 import os
@@ -53,13 +53,13 @@ sheet.save(os.path.join(out, "sheet.png"))
 # stroke close-ups from the 2x render
 strokes = None
 r2 = os.path.join(out, "render_2x.png")
-stroked = [t for t in rep["texts"] if t["stroke_px"] > 0 and t["visible"]]
+stroked = [t for t in rep["texts"] if (t["stroke_px"] > 0 or t.get("underlay") or t.get("gradient")) and t["visible"]]
 if stroked and os.path.exists(r2):
     big = Image.open(r2).convert("RGB")
     tiles = []
     for t in stroked:
         x0, y0, w, h = t["rect"]
-        pad = t["stroke_px"] + 8
+        pad = t["stroke_px"] + (16 if t.get("underlay") else 8)
         tiles.append(big.crop((int((x0 - pad) * 2), int((y0 - pad) * 2), int((x0 + w + pad) * 2), int((y0 + h + pad) * 2))))
     sh = Image.new("RGB", (max(t.width for t in tiles), sum(t.height for t in tiles) + 6 * len(tiles)), "white")
     y = 0

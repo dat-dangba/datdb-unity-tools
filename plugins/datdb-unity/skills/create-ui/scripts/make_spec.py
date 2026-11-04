@@ -17,7 +17,8 @@ from psd_tools import PSDImage  # noqa: E402
 
 import psd_export  # noqa: E402
 import psd_inspect  # noqa: E402
-from spec_common import SHADOW, SpritePlanner, color_name, load_names, parse_args, unique_name, write_spec  # noqa: E402
+from spec_common import (SHADOW, SpritePlanner, color_name, load_names, parse_args, ps_drop_shadow,  # noqa: E402
+                         ps_gradient_overlay, unique_name, write_spec)
 
 
 def fonts_only(psd_path):
@@ -84,7 +85,25 @@ def main():
                 for fx in l["effects"]:
                     if not fx.get("enabled"):
                         continue
-                    if fx["type"] == "Stroke":
+                    if fx["type"] == "DropShadow":
+                        if "underlay" in node:
+                            warnings.append(f"{path}: several drop shadows, only the first is built")
+                        else:
+                            node["underlay"] = ps_drop_shadow(fx, path, warnings)
+                            node["underlay_name"] = color_name(node["underlay"][2:5])
+                    elif fx["type"] == "GradientOverlay":
+                        if "gradient" in node:
+                            warnings.append(f"{path}: several gradient overlays, only the first is built")
+                            continue
+                        g = ps_gradient_overlay(fx, node["w"], node["h"], node["color"], path, warnings)
+                        if g:
+                            node["gradient"], node["color"] = g
+                    elif fx["type"] == "Stroke":
+                        if "stroke_px" in node:
+                            warnings.append(f"{path}: several strokes, only the first is built")
+                            continue
+                        if fx.get("paint", "SClr") != "SClr":
+                            warnings.append(f"{path}: stroke fill {fx.get('paint')} built as its solid color")
                         if fx.get("position") != "OutF":
                             warnings.append(f"{path}: stroke position {fx.get('position')} built as Outside")
                         c = fx["color"]
@@ -92,7 +111,7 @@ def main():
                         node.update(stroke_px=fx["size"], stroke_color=rgb + [round(fx.get("opacity", 100) * 2.55)],
                                     stroke_name=color_name(rgb))
                     else:
-                        warnings.append(f"{path}: text effect {fx['type']} not built")
+                        warnings.append(f"{path}: text effect {fx['type']} not built (TMP: only Stroke, Drop Shadow, Gradient Overlay)")
                 nodes.append(node)
                 continue
             queue = exported.get(l["path"])

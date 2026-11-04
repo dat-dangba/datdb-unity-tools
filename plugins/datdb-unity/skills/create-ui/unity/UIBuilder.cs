@@ -4,7 +4,7 @@
 // One call builds a whole uGUI screen from a spec.json (format: reference/spec.md in the skill) and saves it as a
 // prefab in prefab_dir. CheckFonts(...) runs the font step alone, so a missing font stops the skill before any export work.
 //   validate everything (fonts, prefab name, node tree, sprite sources) -> move shared sprites to Common ->
-//   copy + import new sprites -> 9-slice borders -> outline materials -> temp instance in a PREVIEW scene (own world-space canvas +
+//   copy + import new sprites -> 9-slice borders -> text materials (outline / underlay) -> temp instance in a PREVIEW scene (own world-space canvas +
 //   camera) -> fit texts + auto size -> hide states -> renders (main, 2x, variants) -> save prefab ->
 //   close the preview scene -> <out_dir>/report.json. The open scene is never touched.
 using System;
@@ -23,7 +23,7 @@ namespace DatdbUI
 {
     public static class UIBuilder
     {
-        public const int Version = 6;
+        public const int Version = 7;
 
         [Serializable] public class Move { public string from; public string to; }
 
@@ -40,6 +40,9 @@ namespace DatdbUI
             public float size, leading, anchor_x, baseline_y, stroke_px;
             public float[] color, stroke_color;
             public string stroke_name;
+            public float[] underlay;                   // text drop shadow [dx, dyDown, r, g, b, a(0-1), blur px, dilate px] -> TMP Underlay
+            public string underlay_name;               // color word in the material name
+            public float[] gradient;                   // text Color Gradient: TL, TR, BL, BR as [r, g, b, a] 0-255 (16 numbers)
         }
 
         [Serializable] public class Variant { public string name; public string[] show; public string[] hide; }
@@ -62,7 +65,7 @@ namespace DatdbUI
             public string path, material;
             public float design, rendered, stroke_px;
             public float[] rect;
-            public bool visible;
+            public bool visible, underlay, gradient;
         }
 
         [Serializable]
@@ -150,6 +153,7 @@ namespace DatdbUI
 
             // 1. validate everything BEFORE any change: fonts, prefab name, node tree, sprite sources
             var fontMap = new Dictionary<string, TMP_FontAsset>();
+            matExpect.Clear();
             bool exists = File.Exists(prefabPath);
             Validate(s, rep, nodes, fontMap, prefabPath, exists);
             if (rep.errors.Count > 0) return;
@@ -341,14 +345,20 @@ namespace DatdbUI
                 {
                     var font = fontMap[n.font];
                     Material mat = null;
-                    if (n.stroke_px > 0)
-                        mat = OutlineMat(font, fontsDir, Or(n.stroke_name, "Color"), C(n.stroke_color, Color.black), n.stroke_px, n.size, rep);
+                    if (n.stroke_px > 0 || HasUnderlay(n))
+                        mat = TextMat(font, fontsDir, n, rep);
                     var t = go.AddComponent<TextMeshProUGUI>();
                     t.text = (n.text ?? "").Replace("\r\n", "\n").Replace("\r", "\n");
                     t.font = font;
                     if (mat) t.fontSharedMaterial = mat;
                     t.fontSize = n.size;
                     t.color = C(n.color, Color.black);
+                    if (n.gradient != null && n.gradient.Length >= 16)
+                    {
+                        Func<int, Color> corner = i => new Color(n.gradient[i] / 255f, n.gradient[i + 1] / 255f, n.gradient[i + 2] / 255f, n.gradient[i + 3] / 255f);
+                        t.enableVertexGradient = true;
+                        t.colorGradient = new VertexGradient(corner(0), corner(4), corner(8), corner(12));
+                    }
                     t.textWrappingMode = TextWrappingModes.NoWrap;
                     t.overflowMode = TextOverflowModes.Overflow;
                     t.raycastTarget = false;
@@ -368,7 +378,7 @@ namespace DatdbUI
                         t.alignment = Align(n.align, true);
                     }
                     texts.Add(new BuiltText { path = path, node = n, t = t });
-                    strokes[t] = n.stroke_px;
+                    strokes[t] = n.stroke_px > 0 || HasUnderlay(n) || t.enableVertexGradient ? Mathf.Max(n.stroke_px, 0.01f) : 0f;   // > 0: render_2x close-ups
                 }
 
                 if (!built.ContainsKey(path)) built[path] = b;
@@ -385,7 +395,8 @@ namespace DatdbUI
             foreach (var bt in texts)
             {
                 var t = bt.t;
-                var tr = new TextReport { path = bt.path, design = t.fontSizeMax, stroke_px = strokes[t], material = t.fontSharedMaterial.name, visible = t.gameObject.activeInHierarchy };
+                var tr = new TextReport { path = bt.path, design = t.fontSizeMax, stroke_px = bt.node.stroke_px, material = t.fontSharedMaterial.name,
+                                         visible = t.gameObject.activeInHierarchy, underlay = HasUnderlay(bt.node), gradient = t.enableVertexGradient };
                 bool was = t.gameObject.activeSelf;
                 var chain = Activate(t.transform, rootGo.transform);
                 t.ForceMeshUpdate(true);
@@ -406,7 +417,7 @@ namespace DatdbUI
             PrefabUtility.SaveAsPrefabAsset(rootGo, prefabPath, out saved);
             AssetDatabase.SaveAssets();
             if (!saved || !File.Exists(prefabPath)) { rep.errors.Add("prefab save failed: " + prefabPath); return; }
-            CheckOutlineMats(rep);
+            CheckTextMats(rep);
             rep.prefab = prefabPath;
             rep.log.Add((exists ? "replaced " : "created ") + prefabPath + " with " + nodes.Length + " nodes");
         }
@@ -540,58 +551,135 @@ namespace DatdbUI
             return w;
         }
 
-        static Material OutlineMat(TMP_FontAsset font, string dir, string colorName, Color c, float strokePx, float fontSize, Report rep)
-        {
-            float texels = strokePx * font.faceInfo.pointSize / fontSize;
-            if (texels > font.atlasPadding)
-                rep.warnings.Add(font.name + ": stroke " + strokePx + "px at " + fontSize + " needs " + texels.ToString("F1") + " texels > atlas padding " + font.atlasPadding + " (ask the user before raising padding)");
+        static bool HasUnderlay(Node n) { return n.underlay != null && n.underlay.Length >= 6; }
 
-            var probe = new Material(font.material);
-            probe.EnableKeyword("OUTLINE_ON");
-            probe.DisableKeyword("RATIOS_OFF");
-            float gs = probe.GetFloat(ShaderUtilities.ID_GradientScale);
-            float w = SolveWidth(probe, texels / gs / 2f);
-            UnityEngine.Object.DestroyImmediate(probe);
+        // Underlay offset moves u * ratioC * gradientScale texels, softness widens the edge by 2 * s * ratioC * gs texels
+        // and dilate grows it by d * ratioC * gs texels (TMP_SDF.shader). ratioC depends on all three, so iterate.
+        // ratioC also shrinks everything to fit the atlas padding (minus the bold-weight reserve), so the achieved
+        // offset can be shorter than asked. Returns the achieved offset in texels.
+        static float SolveUnderlayOnce(Material m, float dx, float dyUp, float blur, float dil, float gs)
+        {
+            float rc = 1f;
+            for (int i = 0; i < 40; i++)
+            {
+                m.SetFloat(ShaderUtilities.ID_UnderlayOffsetX, Mathf.Clamp(dx / (rc * gs), -1f, 1f));
+                m.SetFloat(ShaderUtilities.ID_UnderlayOffsetY, Mathf.Clamp(dyUp / (rc * gs), -1f, 1f));
+                m.SetFloat(ShaderUtilities.ID_UnderlaySoftness, Mathf.Clamp01(blur / (2f * gs * rc)));
+                m.SetFloat(ShaderUtilities.ID_UnderlayDilate, Mathf.Clamp(dil / (gs * rc), -1f, 1f));
+                ShaderUtilities.UpdateShaderRatios(m);
+                float r2 = m.GetFloat(ShaderUtilities.ID_ScaleRatio_C);
+                if (r2 <= 0f || Mathf.Abs(r2 - rc) < 1e-5f) break;
+                rc = r2;
+            }
+            rc = m.GetFloat(ShaderUtilities.ID_ScaleRatio_C);
+            float ox = m.GetFloat(ShaderUtilities.ID_UnderlayOffsetX) * rc * gs, oy = m.GetFloat(ShaderUtilities.ID_UnderlayOffsetY) * rc * gs;
+            return Mathf.Sqrt(ox * ox + oy * oy);
+        }
+
+        // Keeps the offset first: when the padding is too small it drops the dilate, then the blur. -> what was dropped.
+        static string SolveUnderlay(Material m, float[] u, float pxToTexel, float gs, out float achieved, out float wanted)
+        {
+            float dx = u[0] * pxToTexel, dyUp = -u[1] * pxToTexel;
+            float blur = (u.Length > 6 ? u[6] : 0f) * pxToTexel, dil = (u.Length > 7 ? u[7] : 0f) * pxToTexel;
+            wanted = Mathf.Sqrt(dx * dx + dyUp * dyUp);
+            achieved = SolveUnderlayOnce(m, dx, dyUp, blur, dil, gs);
+            if (wanted - achieved < 0.25f * pxToTexel) return "";
+            if (dil > 0f)
+            {
+                achieved = SolveUnderlayOnce(m, dx, dyUp, blur, 0f, gs);
+                if (wanted - achieved < 0.25f * pxToTexel || blur <= 0f) return "spread";
+            }
+            if (blur > 0f)
+            {
+                achieved = SolveUnderlayOnce(m, dx, dyUp, 0f, 0f, gs);
+                return dil > 0f ? "spread and blur" : "blur";
+            }
+            return "";
+        }
+
+        static bool Near(Color a, Color b) { return Mathf.Abs(a.r - b.r) + Mathf.Abs(a.g - b.g) + Mathf.Abs(a.b - b.b) + Mathf.Abs(a.a - b.a) < 0.02f; }
+        static bool Near(Material a, Material b, int id) { return Mathf.Abs(a.GetFloat(id) - b.GetFloat(id)) < 0.002f; }
+
+        // path -> {outline, underlay}: what CheckTextMats expects on disk
+        static readonly Dictionary<string, bool[]> matExpect = new Dictionary<string, bool[]>();
+
+        // One material per (atlas, outline color + width, underlay color + offset + softness + dilate), named
+        // "<font> Outline <Color>[ Underlay <Color>].mat" or "<font> Underlay <Color>.mat"; an existing match is reused.
+        static Material TextMat(TMP_FontAsset font, string dir, Node n, Report rep)
+        {
+            bool outline = n.stroke_px > 0, under = HasUnderlay(n);
+            float pxToTexel = font.faceInfo.pointSize / n.size;
+            var mat = new Material(font.material);
+            mat.DisableKeyword("RATIOS_OFF");   // keep ratios ON; RATIOS_OFF caused square artifacts
+            float gs = mat.GetFloat(ShaderUtilities.ID_GradientScale);
+            if (outline)
+            {
+                float texels = n.stroke_px * pxToTexel;
+                if (texels > font.atlasPadding)
+                    rep.warnings.Add(font.name + ": stroke " + n.stroke_px + "px at " + n.size + " needs " + texels.ToString("F1") + " texels > atlas padding " + font.atlasPadding + " (ask the user before raising padding)");
+                mat.EnableKeyword("OUTLINE_ON");
+                mat.SetColor(ShaderUtilities.ID_OutlineColor, C(n.stroke_color, Color.black));
+            }
+            if (under)
+            {
+                var u = n.underlay;
+                if (!mat.HasProperty(ShaderUtilities.ID_UnderlayColor))
+                    rep.warnings.Add(font.name + ": shader " + mat.shader.name + " has no Underlay; drop shadow not built");
+                mat.EnableKeyword("UNDERLAY_ON");
+                mat.SetColor(ShaderUtilities.ID_UnderlayColor, new Color(u[2] / 255f, u[3] / 255f, u[4] / 255f, u[5]));
+            }
+            string dropped = "";
+            float achieved = 0f, wanted = 0f;
+            for (int k = 0; k < 4; k++)   // the ratios depend on both effects
+            {
+                if (outline) SolveWidth(mat, n.stroke_px * pxToTexel / gs / 2f);
+                if (under) dropped = SolveUnderlay(mat, n.underlay, pxToTexel, gs, out achieved, out wanted);
+            }
+            if (under && dropped != "")
+                rep.warnings.Add(font.name + " at " + n.size + ": drop shadow " + dropped + " dropped to fit the atlas padding " + font.atlasPadding);
+            if (under && wanted - achieved >= 0.25f * pxToTexel)
+                rep.warnings.Add(font.name + " at " + n.size + ": drop shadow offset " + (wanted / pxToTexel).ToString("F1") + "px built as "
+                                 + (achieved / pxToTexel).ToString("F1") + "px (atlas padding " + font.atlasPadding + "; ask the user before raising it)");
 
             foreach (var g in AssetDatabase.FindAssets("t:Material", new[] { dir }))
             {
                 var path = AssetDatabase.GUIDToAssetPath(g);
                 var m = AssetDatabase.LoadAssetAtPath<Material>(path);
-                if (m == null || !m.HasProperty(ShaderUtilities.ID_OutlineColor) || !m.IsKeywordEnabled("OUTLINE_ON")) continue;
-                if (m.GetTexture(ShaderUtilities.ID_MainTex) != font.atlasTexture) continue;
-                var oc = m.GetColor(ShaderUtilities.ID_OutlineColor);
-                bool same = Mathf.Abs(oc.r - c.r) + Mathf.Abs(oc.g - c.g) + Mathf.Abs(oc.b - c.b) < 0.02f
-                            && Mathf.Abs(m.GetFloat(ShaderUtilities.ID_OutlineWidth) - w) < 0.002f;
-                if (same)
-                {
-                    if (!rep.materials_reused.Contains(path)) rep.materials_reused.Add(path);
-                    return m;
-                }
+                if (m == null || m.shader != mat.shader || m.GetTexture(ShaderUtilities.ID_MainTex) != font.atlasTexture) continue;
+                if (m.IsKeywordEnabled("OUTLINE_ON") != outline || m.IsKeywordEnabled("UNDERLAY_ON") != under) continue;
+                if (outline && !(Near(m.GetColor(ShaderUtilities.ID_OutlineColor), mat.GetColor(ShaderUtilities.ID_OutlineColor))
+                                 && Near(m, mat, ShaderUtilities.ID_OutlineWidth) && Near(m, mat, ShaderUtilities.ID_FaceDilate))) continue;
+                if (under && !(Near(m.GetColor(ShaderUtilities.ID_UnderlayColor), mat.GetColor(ShaderUtilities.ID_UnderlayColor))
+                               && Near(m, mat, ShaderUtilities.ID_UnderlayOffsetX) && Near(m, mat, ShaderUtilities.ID_UnderlayOffsetY)
+                               && Near(m, mat, ShaderUtilities.ID_UnderlaySoftness) && Near(m, mat, ShaderUtilities.ID_UnderlayDilate))) continue;
+                UnityEngine.Object.DestroyImmediate(mat);
+                if (!rep.materials_reused.Contains(path)) rep.materials_reused.Add(path);
+                matExpect[path] = new[] { outline, under };
+                return m;
             }
 
-            string baseName = dir + "/" + font.name + " Outline " + colorName;
+            string baseName = dir + "/" + font.name + (outline ? " Outline " + Or(n.stroke_name, "Color") : "")
+                              + (under ? " Underlay " + Or(n.underlay_name, "Color") : "");
             string file = baseName + ".mat";
             for (int i = 2; File.Exists(file); i++) file = baseName + " " + i + ".mat";
-            // Set everything BEFORE CreateAsset: changes made after it were lost on disk (PausedUI/BoosterUI, Version 5),
-            // so the first write must already hold the outline. CheckOutlineMats checks the files after the build.
-            var mat = new Material(font.material);
-            mat.SetColor(ShaderUtilities.ID_OutlineColor, c);
-            mat.EnableKeyword("OUTLINE_ON");
-            mat.DisableKeyword("RATIOS_OFF");   // keep ratios ON; RATIOS_OFF caused square artifacts
-            SolveWidth(mat, texels / gs / 2f);
+            // Everything is set BEFORE CreateAsset: changes made after it were lost on disk (PausedUI/BoosterUI,
+            // Version 5), so the first write must already hold the effects. CheckTextMats checks the files after the build.
             AssetDatabase.CreateAsset(mat, file);
             rep.materials_created.Add(file);
+            matExpect[file] = new[] { outline, under };
             return mat;
         }
 
         // The renders use the in-memory materials, so a material that is wrong on disk would still pass verify.py.
-        static void CheckOutlineMats(Report rep)
+        static void CheckTextMats(Report rep)
         {
-            foreach (var path in rep.materials_created.Concat(rep.materials_reused).Distinct())
+            foreach (var kv in matExpect)
             {
-                string txt = File.Exists(path) ? File.ReadAllText(path) : "";
-                if (!txt.Contains("OUTLINE_ON") || txt.Contains("_OutlineWidth: 0\n"))
-                    rep.errors.Add("outline material not saved on disk (no OUTLINE_ON or width 0): " + path);
+                string txt = File.Exists(kv.Key) ? File.ReadAllText(kv.Key) : "";
+                if (kv.Value[0] && (!txt.Contains("OUTLINE_ON") || txt.Contains("_OutlineWidth: 0\n")))
+                    rep.errors.Add("outline material not saved on disk (no OUTLINE_ON or width 0): " + kv.Key);
+                if (kv.Value[1] && !txt.Contains("UNDERLAY_ON"))
+                    rep.errors.Add("underlay material not saved on disk (no UNDERLAY_ON): " + kv.Key);
             }
         }
 

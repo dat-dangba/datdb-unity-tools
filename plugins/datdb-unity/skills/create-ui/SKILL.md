@@ -42,11 +42,11 @@ in every path, including the C# strings.
 - `unity/UIBuilder.cs`: the template for `Assets/_Project/Editor/UIBuilder.cs` (installed by setup.py), called as
   `DatdbUI.UIBuilder.CheckFonts(keys…)` (font step alone) and `DatdbUI.UIBuilder.Build(specPath)`. In one call it
   does: validate EVERYTHING first (fonts, prefab name, node tree, sprite sources, variant paths) → move shared
-  sprites to Common → copy and import new sprites → outline materials → build in a preview scene → fit texts + Auto
+  sprites to Common → copy and import new sprites → text materials (outline / underlay) → build in a preview scene → fit texts + Auto
   Size → hidden states → renders (main, 2×, variants) → save prefab → close the preview scene → `report.json`.
   Any error found by the validation changes nothing.
 - `reference/spec.md`: the spec.json format and the report fields. Read it before editing a spec by hand.
-- `scripts/make_spec.py`: PSD → spec.json (inspect + export + dedupe, buttons, labels, strokes, variants).
+- `scripts/make_spec.py`: PSD → spec.json (inspect + export + dedupe, buttons, labels, text effects, variants).
   `--fonts-only` prints `{font: [text layers]}` (~1 s).
 - `scripts/figma_dump.js`: the ONE read-only `use_figma` script: fonts + every node's properties.
 - `scripts/figma_spec.py`: Figma dump + downloaded images → spec.json (same dedupe, buttons, labels, variants).
@@ -102,8 +102,14 @@ in every path, including the C# strings.
   - If a per-UI folder ends up empty, it should be deleted. `AssetDatabase.DeleteAsset` is blocked through Unity
     MCP (folders and files), so tell the user which empty folders to delete by hand.
 - Download or export into the scratchpad first. Only what is actually new goes into `Assets` (`new_sprites`).
-- Fonts live in `Assets/_Project/Fonts/` as TMP SDF assets. Outline materials sit next to them, named
-  `"<font asset> Outline <Color>.mat"`. UIBuilder reuses them when font, color and width match. A font key
+- Fonts live in `Assets/_Project/Fonts/` as TMP SDF assets. Text materials sit next to them, named
+  `"<font asset> Outline <Color>.mat"`, `"<font asset> Underlay <Color>.mat"` or
+  `"<font asset> Outline <Color> Underlay <Color>.mat"`. UIBuilder reuses one when font, colors and computed
+  values match.
+- Text effects (PSD layer styles / Figma text fills and effects): Stroke → TMP Outline, Drop Shadow → TMP Underlay
+  (offset, blur → softness, spread → dilate), Gradient Overlay / gradient fill → TMP Color Gradient (4 corner
+  vertex colors, applied per glyph). Every other text effect (Inner Shadow, Glow, Bevel, Satin, Color/Pattern
+  Overlay, extra strokes or shadows, blend modes) is listed in `warnings`: tell the user it was not built. A font key
   matches a TMP asset by family + style, by the asset name without `SDF`, or by the source `.ttf`/`.otf` name.
 - When reporting results, never claim an operation worked without checking the disk. UIBuilder's report only
   lists checked results. Still `ls` the new image folder once.
@@ -204,7 +210,8 @@ $PY -I -B $S/scripts/make_spec.py <file.psd> . <scratchpad>/build_<name> [--name
 - `renamed` (layers renamed by the map) and `sprite_renames` (also listed in `move_to_common`).
 - `nested`: `A -> B` for every layer moved under a container. Check that they make sense.
 - `variants`: check that they make sense.
-- `warnings`: empty layers (built with a disabled Image; tell the user), effects that weren't built,
+- `warnings`: empty layers (built with a disabled Image; tell the user), effects that weren't built (text
+  effects other than Stroke / Drop Shadow / Gradient Overlay), gradient approximations,
   blend/opacity, several text styles, renamed duplicates, baked-shadow guesses and layers that could not be nested.
 
 Edit `spec.json` only when a warning needs it.
@@ -241,15 +248,16 @@ internal class CommandScript : IRunCommand
 - `EXISTS: …`: the prefab already exists; ask the user to overwrite or rename.
 - Other validation errors (`parent not found`, `sprite not found`, `variant …: no node`, …): fix the spec and run
   it again. Nothing was changed.
-- Read `warnings`, especially any text that shrinks below its design size or any stroke wider than the padding.
+- Read `warnings`, especially any text that shrinks below its design size, any stroke wider than the padding and
+  any drop shadow built shorter than its design offset or with its spread/blur dropped (atlas padding too small).
 
 ## Step 4: Verify (always, before reporting)
 
 ```bash
 $PY -I -B $S/scripts/verify.py <scratchpad>/build_<name>
 ```
-- View `sheet.png` (render | heatmap | each variant) in ONE Read. When there are outlined texts, Read
-  `strokes.png` in the same message. There must be no square artifacts.
+- View `sheet.png` (render | heatmap | each variant) in ONE Read. When there are outlined, shadowed or gradient texts,
+  Read `strokes.png` in the same message. There must be no square artifacts.
 - `mean_diff` is measured inside the content box (`mean_diff_frame` over the whole frame). `pass` means
   mean_diff ≤ 5 with only thin edges differing (the BoosterUI PSD build: 3.3, frame 1.5). If it fails, open
   `heatmap.png`, fix the structural problem, and re-run Build with `"replace": true`. That is allowed for a UI you
@@ -261,6 +269,6 @@ $PY -I -B $S/scripts/verify.py <scratchpad>/build_<name>
 - Images: what was reused, what was moved to `Common/`, what is new, and empty folders the user should delete.
 - The rename map, when you wrote one this turn: its path and an `old → new` table. Tell the user they can edit
   it and rebuild with `--replace`.
-- Fonts and outline materials used or created.
+- Fonts and text materials (outline / underlay) used or created; text effects that were not built.
 - Hidden layers, what still needs the user (empty layers, onClick not wired),
   and what you could not verify (e.g. strokes of hidden variants are only checked at 1×).

@@ -5,6 +5,7 @@ Common/ moves, button labels, variants and the field defaults behave the same wh
 """
 import colorsys
 import json
+import math
 import os
 import re
 
@@ -33,6 +34,87 @@ def color_name(rgb):
                         (255, "Blue"), (290, "Purple"), (340, "Pink"), (361, "Red")):
         if h < limit:
             return name
+
+
+def _lerp_stops(stops, t):
+    """stops: sorted [[loc0-1, v1, v2, ...]] -> values at t (clamped, linear between stops)."""
+    if not stops:
+        return None
+    if t <= stops[0][0]:
+        return list(stops[0][1:])
+    for a, b in zip(stops, stops[1:]):
+        if t <= b[0]:
+            k = 0 if b[0] == a[0] else (t - a[0]) / (b[0] - a[0])
+            return [x + (y - x) * k for x, y in zip(a[1:], b[1:])]
+    return list(stops[-1][1:])
+
+
+def _over(base, rgb, a):
+    return [round(b + (c - b) * a) for b, c in zip(base, rgb)]
+
+
+# Text effects for TMP. "underlay": [dx, dyDown, r, g, b, alpha0-1, blur_px, dilate_px] -> material Underlay;
+# "gradient": 16 numbers, the TL, TR, BL, BR corners [r, g, b, a] 0-255 -> TMP Color Gradient (vertex colors, applied
+# per glyph). With a gradient the node color becomes white (keeping its alpha) so the corners are the final colors.
+def ps_drop_shadow(fx, path, warnings):
+    """Photoshop Drop Shadow -> underlay. Spread % hardens part of the size into a dilate, as Photoshop does."""
+    a = math.radians(fx.get("angle", 120))
+    dist, blur, spread = fx.get("distance", 0), fx.get("blur", 0), fx.get("spread", 0)
+    c = fx.get("color", {})
+    rgb = [c.get("Rd", 0), c.get("Grn", 0), c.get("Bl", 0)]
+    blend = fx.get("blend", "Nrml")
+    if blend not in ("Nrml", "Mltp") or (blend == "Mltp" and max(rgb) > 40):
+        warnings.append(f"{path}: drop shadow blend {blend} built as Normal; compare the render")
+    dilate = blur * spread / 100
+    return [round(-dist * math.cos(a), 2), round(dist * math.sin(a), 2)] + rgb + \
+        [round(fx.get("opacity", 100) / 100, 3), round(blur - dilate, 2), round(dilate, 2)]
+
+
+def ps_gradient_overlay(fx, w, h, fill, path, warnings):
+    """Photoshop Gradient Overlay on a text layer -> (gradient corners, new node color) or None (warned)."""
+    g = fx.get("gradient")
+    if not g or g.get("noise") or not g.get("colors"):
+        warnings.append(f"{path}: noise / empty gradient overlay not built")
+        return None
+    if fx.get("style", "Lnr") != "Lnr":
+        warnings.append(f"{path}: gradient overlay style {fx.get('style')} built as Linear (TMP Color Gradient)")
+    if fx.get("blend", "Nrml") != "Nrml":
+        warnings.append(f"{path}: gradient overlay blend {fx.get('blend')} built as Normal")
+    if any(c[4] != "UsrS" for c in g["colors"]):
+        warnings.append(f"{path}: gradient stop uses the foreground/background color; its stored color is used")
+    if len(g["colors"]) > 2 or len(g["alphas"]) > 2:
+        warnings.append(f"{path}: gradient with {len(g['colors'])} color stops: TMP keeps only the 4 corner colors")
+    a = math.radians(fx.get("angle", 90))
+    ca, sa = math.cos(a), math.sin(a)
+    extent = (abs(w * ca) + abs(h * sa)) * fx.get("scale", 100) / 100 or 1
+    out = []
+    for x, y in ((-w / 2, h / 2), (w / 2, h / 2), (-w / 2, -h / 2), (w / 2, -h / 2)):   # TL TR BL BR, y up
+        t = min(1.0, max(0.0, 0.5 + (x * ca + y * sa) / extent))
+        if fx.get("reverse"):
+            t = 1 - t
+        rgb = _lerp_stops([c[:4] for c in g["colors"]], t)
+        k = _lerp_stops(g["alphas"], t)[0] * fx.get("opacity", 100) / 100
+        out += _over(fill[:3], rgb, k) + [255]
+    warnings.append(f"{path}: gradient overlay -> TMP Color Gradient (vertex colors, per glyph); compare the render")
+    return out, [255, 255, 255, fill[3]]
+
+
+def figma_gradient(paint, base, path, warnings):
+    """Figma GRADIENT_* fill on a text -> (gradient corners, node color). base: [r, g, b, a] under it, or None."""
+    if paint["type"] != "GRADIENT_LINEAR":
+        warnings.append(f"{path}: {paint['type']} built as a linear TMP Color Gradient")
+    stops = sorted(paint.get("stops") or [])
+    if len(stops) > 2:
+        warnings.append(f"{path}: gradient with {len(stops)} stops: TMP keeps only the 4 corner colors")
+    (a, b, c), _ = paint.get("transform") or [[1, 0, 0], [0, 1, 0]]
+    op = paint.get("opacity", 1)
+    out = []
+    for u, v in ((0, 0), (1, 0), (0, 1), (1, 1)):   # TL TR BL BR in the node's unit box (y down)
+        r, g, bl, al = _lerp_stops(stops, min(1.0, max(0.0, a * u + b * v + c)))
+        k = al * op
+        out += (_over(base[:3], [r, g, bl], k) + [255]) if base else [round(r), round(g), round(bl), round(255 * k)]
+    warnings.append(f"{path}: gradient fill -> TMP Color Gradient (vertex colors, per glyph); compare the render")
+    return out, [255, 255, 255, base[3] if base else 255]
 
 
 def file_stem(name):
