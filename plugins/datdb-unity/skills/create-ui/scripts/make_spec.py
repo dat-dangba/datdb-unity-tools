@@ -109,7 +109,7 @@ def main():
                 sprite, off, size = planner.sprite_for(e["file"], e["name"])
                 size = size or tuple(e["size"])
                 node.update(sprite=sprite, x=e["bbox"][0] + off[0], y=e["bbox"][1] + off[1], w=size[0], h=size[1])
-                if 3 <= max(off) <= 7:
+                if 3 <= max(off) <= 7 and sprite not in planner.borders:   # a Sliced rect's offset is only padding
                     node["shadow"] = SHADOW
                     warnings.append(f"{path}: reused sprite sits {off} px inside the PSD art (baked shadow?) -> "
                                     f"Shadow {SHADOW}; compare the render")

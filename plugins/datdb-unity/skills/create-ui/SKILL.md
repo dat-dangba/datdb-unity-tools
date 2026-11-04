@@ -88,9 +88,13 @@ in every path, including the C# strings.
   - Before adding any image, dedupe it against everything in `Images/UI/**` (the spec writers do it). Reuse
     matches. If a match lives in another UI's folder, it moves to `Common/` (`move_to_common`; UIBuilder uses
     `AssetDatabase.MoveAsset`, which keeps the GUID, and checks the disk).
-  - 9-slice: when no exact match exists outside this UI's folder, dedupe also tries each sprite of the same height
-    (or width) drawn Sliced (`match_sprites.slice_match`: border from the longest run of identical columns/rows,
-    rebuild diff ≤ `SLICE_ART`). A match reuses that sprite with `"slice": [l, b, r, t]`; UIBuilder sets the
+  - 9-slice: when no exact match exists outside this UI's folder, dedupe also tries each sprite drawn Sliced, in
+    width, height or both (`match_sprites.slice_fit`: transparent padding of both images is trimmed first, border
+    from the longest run of identical columns/rows, rebuild diff ≤ `SLICE_ART`). The node rect becomes the trimmed
+    art (+ the sprite's own padding), so a frame exported with empty margins still lines up. A cheap pre-filter
+    (flat runs + middle colour) skips the pixel compare for almost every sprite, and per-sprite data is cached in
+    `<project>/Library/datdb-ui/sprite_index.json` (rebuilt only for new/changed files; safe to delete). A match
+    reuses that sprite with `"slice": [l, b, r, t]`; UIBuilder sets the
     Sprite Editor border once (an existing different border is kept + warned) and uses Image Type Sliced. A node
     whose sprite already has a border and is drawn at native size is Sliced too. The own-folder copy it replaces
     is listed in `unused_sprites`: tell the user to delete it. Two new images of one build are matched the same way.

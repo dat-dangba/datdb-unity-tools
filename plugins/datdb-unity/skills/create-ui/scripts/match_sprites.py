@@ -2,7 +2,9 @@
 
 dedupe  - is each candidate image (exported PSD layer / downloaded Figma asset) already a project sprite?
           Exact md5 first, then pixel compare with a small offset search (PSD smart objects often carry a few px of
-          baked shadow) at scales 1, 0.5 and 2.
+          baked shadow) at scales 1, 0.5 and 2, then 9-slice (a sprite drawn Sliced; transparent padding is trimmed
+          first). Per-sprite data (md5, size, trim box, flat runs) is cached in <project>/Library/datdb-ui/
+          sprite_index.json, so only new/changed files are read and a cheap pre-filter skips most pixel compares.
             python -I match_sprites.py dedupe <sprites_root> <candidate.png> [...]
 
 locate  - find where project sprites appear (mostly unoccluded) on a flat mockup. Fast first pass only: sprites that
@@ -34,6 +36,7 @@ from PIL import Image
 
 SAME_ART = 2.0
 SLICE_ART = 2.0   # mean |RGBA| diff of a 9-slice rebuild that still counts as the same art
+COARSE_PTS = 2000  # opaque pixels sampled per offset before the full exact-match compare
 FLAT = 2          # max channel step between neighbour columns/rows of a stretchable middle
 
 
@@ -131,14 +134,110 @@ def slice_match(src, dst):
     return (border, round(d, 3)) if d <= SLICE_ART else None
 
 
+def trim_box(arr):
+    """[x0, y0, x1, y1] of the pixels with alpha > 0 (the whole image when it is empty)."""
+    ys, xs = np.nonzero(arr[..., 3] > 0)
+    if not len(xs):
+        return [0, 0, arr.shape[1], arr.shape[0]]
+    return [int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1]
+
+
+def slice_info(arr):
+    """What the 9-slice pre-filter needs: trimmed box, flat column/row runs and the colour in their middle."""
+    x0, y0, x1, y1 = trim_box(arr)
+    t = arr[y0:y1, x0:x1]
+    cols, rows = flat_run(t, 1), flat_run(t, 0)
+    my = (rows[0] + rows[1]) // 2 if rows else t.shape[0] // 2
+    mx = (cols[0] + cols[1]) // 2 if cols else t.shape[1] // 2
+    return {"size": [arr.shape[1], arr.shape[0]], "box": [x0, y0, x1, y1],
+            "cols": list(map(int, cols)) if cols else None, "rows": list(map(int, rows)) if rows else None,
+            "mid": [int(v) for v in t[my, mx]]}
+
+
+def slice_plausible(src, dst):
+    """Cheap test on two slice_info dicts: can dst be src drawn Sliced? (No pixels needed.)"""
+    ws, hs = src["box"][2] - src["box"][0], src["box"][3] - src["box"][1]
+    wd, hd = dst["box"][2] - dst["box"][0], dst["box"][3] - dst["box"][1]
+    if (ws, hs) == (wd, hd):
+        return False
+    if ws != wd and not (src["cols"] and dst["cols"]):
+        return False
+    if hs != hd and not (src["rows"] and dst["rows"]):
+        return False
+    return max(abs(a - b) for a, b in zip(src["mid"], dst["mid"])) <= 4
+
+
+def slice_fit(src, dst, si=None, di=None):
+    """slice_match on the trimmed images (transparent padding ignored).
+    -> {"slice": border of the WHOLE src sprite, "diff", "offset": [dx, dy] of the Sliced rect inside dst,
+        "size": [w, h] of that rect} or None."""
+    si, di = si or slice_info(src), di or slice_info(dst)
+    if not slice_plausible(si, di):
+        return None
+    sb, db = si["box"], di["box"]
+    r = slice_match(src[sb[1]:sb[3], sb[0]:sb[2]], dst[db[1]:db[3], db[0]:db[2]])
+    if not r:
+        return None
+    (l, b, rr, t), d = r
+    W, H = si["size"]
+    pl, pt, pr, pb = sb[0], sb[1], W - sb[2], H - sb[3]   # src padding, kept inside the Sliced rect
+    sx, sy = sb[2] - sb[0] != db[2] - db[0], sb[3] - sb[1] != db[3] - db[1]
+    border = [l + pl if sx else 0, b + pb if sy else 0, rr + pr if sx else 0, t + pt if sy else 0]  # unstretched axis: 0
+    return {"slice": border, "diff": d, "offset": [db[0] - pl, db[1] - pt],
+            "size": [db[2] - db[0] + pl + pr, db[3] - db[1] + pt + pb]}
+
+
+def index_path(root):
+    """Sprite index cache: <project>/Library/datdb-ui/sprite_index.json (Library is never committed), or
+    ~/.cache/datdb-uienv/ when root is not inside a Unity project."""
+    d = os.path.abspath(root)
+    while os.path.dirname(d) != d:
+        if os.path.basename(d) == "Assets":
+            return os.path.join(os.path.dirname(d), "Library", "datdb-ui", "sprite_index.json")
+        d = os.path.dirname(d)
+    key = hashlib.md5(os.path.abspath(root).encode()).hexdigest()[:12]
+    return os.path.join(os.path.expanduser("~"), ".cache", "datdb-uienv", f"sprite_index_{key}.json")
+
+
+INDEX_VERSION = 1
+
+
+def sprite_index(root):
+    """{path: slice_info + "key"} for every sprite under root. Only files whose size/mtime changed are read again."""
+    path = index_path(root)
+    try:
+        with open(path) as fh:
+            old = json.load(fh)
+        old = old.get("sprites", {}) if old.get("version") == INDEX_VERSION else {}
+    except (OSError, ValueError):
+        old = {}
+    new = {}
+    for p in sprites(root):
+        st = os.stat(p)
+        key = f"{st.st_size}:{st.st_mtime_ns}"
+        e = old.get(p)
+        if not e or e.get("key") != key:
+            e = dict(slice_info(load(p)), key=key, md5=md5(p))
+        new[p] = e
+    if new != old:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path + ".tmp", "w") as fh:
+                json.dump({"version": INDEX_VERSION, "sprites": new}, fh)
+            os.replace(path + ".tmp", path)
+        except OSError:
+            pass   # the cache only saves time
+    return new
+
+
 def dedupe_items(root, candidates, own=None):
     """[{candidate, match|None, how|diff, offset, scale, slice?, stale?}] for each candidate png.
     Order: exact match (md5 / pixels, maybe offset or 0.5x/2x) outside `own` (this UI's folder) > 9-slice match
     (`slice` = sprite border; the stale own exact copy goes to `stale`) > exact match in `own` > nothing."""
     out = []
-    existing = sprites(root) if os.path.isdir(root) else []
-    hashes = {md5(p): p for p in existing}
-    sizes = {p: Image.open(p).size for p in existing}   # header only; pixels are loaded on first real compare
+    index = sprite_index(root) if os.path.isdir(root) else {}   # cached per file; pixels load on first real compare
+    hashes = {e["md5"]: p for p, e in index.items()}
+    sizes = {p: tuple(e["size"]) for p, e in index.items()}
     loaded = {}
 
     def get(p):
@@ -163,20 +262,29 @@ def dedupe_items(root, candidates, own=None):
                         continue
                     b = resized(get(p), scale)
                     m = opaque_mask(b)
+                    ys, xs = np.nonzero(m)
+                    step = max(1, len(ys) // COARSE_PTS)
+                    ys, xs = ys[::step], xs[::step]
+                    bs = b[ys, xs, :3]
                     for y in range(a.shape[0] - b.shape[0] + 1):
                         for x in range(a.shape[1] - b.shape[1] + 1):
+                            if float(np.abs(a[ys + y, xs + x, :3] - bs).mean()) > 3 * SAME_ART:
+                                continue   # a sample of the opaque pixels is already far off: skip the full compare
                             sub = a[y:y + b.shape[0], x:x + b.shape[1]]
                             d = float(np.abs(sub[..., :3][m] - b[..., :3][m]).mean())
                             if d <= SAME_ART and (found is None or d < found["diff"]):
                                 found = {"match": p, "diff": round(d, 3), "offset": [x, y], "scale": scale}
         if found is None or is_own(found["match"]):
             best = None
+            ai = slice_info(a)
             for p, (bw, bh) in sizes.items():
                 if (found and p == found["match"]) or (found and is_own(p)) or (bw, bh) == (a.shape[1], a.shape[0]):
                     continue
-                r = slice_match(get(p), a)
-                if r and (best is None or r[1] < best["diff"]):
-                    best = {"match": p, "diff": r[1], "offset": [0, 0], "scale": 1.0, "slice": r[0]}
+                if not slice_plausible(index[p], ai):   # no pixels read for the (many) sprites that can't match
+                    continue
+                r = slice_fit(get(p), a, index[p], ai)
+                if r and (best is None or r["diff"] < best["diff"]):
+                    best = {"match": p, "scale": 1.0, **r}
             if best:
                 if found:
                     best["stale"] = found["match"]

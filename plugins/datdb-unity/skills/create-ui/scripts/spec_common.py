@@ -109,7 +109,7 @@ class SpritePlanner:
                     self.stale.add(self.rel(m["stale"]))
                 self.reused.append(f"{label} -> {path} (Sliced, border {m['slice']}, diff {m['diff']})")
                 self.assigned[f] = path
-                return path, [0, 0], None
+                return path, m["offset"], tuple(m["size"])
             w, h = Image.open(m["match"]).size
             sc = m.get("scale", 1.0)
             off = m.get("offset", [0, 0])
@@ -121,13 +121,14 @@ class SpritePlanner:
                 self.assigned[f] = prev
                 return prev, [0, 0], None
         cand = match_sprites.load(f)
+        ci = match_sprites.slice_info(cand)
         for prev_file, prev in self.assigned.items():   # the same button art at two widths in this design
-            r = match_sprites.slice_match(match_sprites.load(prev_file), cand)
-            if r and self.borders.get(prev, r[0]) == r[0]:
-                self.borders[prev] = r[0]
-                self.reused.append(f"{label} -> {prev} (Sliced, border {r[0]}, diff {r[1]})")
+            r = match_sprites.slice_fit(match_sprites.load(prev_file), cand, di=ci)
+            if r and self.borders.get(prev, r["slice"]) == r["slice"]:
+                self.borders[prev] = r["slice"]
+                self.reused.append(f"{label} -> {prev} (Sliced, border {r['slice']}, diff {r['diff']})")
                 self.assigned[f] = prev
-                return prev, [0, 0], None
+                return prev, r["offset"], tuple(r["size"])
         stem = file_stem(label)
         dst = f"{self.own}/{stem}.png"
         i = 2

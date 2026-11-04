@@ -60,8 +60,8 @@ def main():
     def image_node(n, a, parent, nm):
         x, y, w, h = rect_of(n, a)
         sprite, off, size = planner.sprite_for(a["file"], n["name"])
-        if size and off != [0, 0]:   # the download carries a few extra px around a matching sprite
-            fw, fh = Image.open(a["file"]).size
+        fw, fh = Image.open(a["file"]).size
+        if size and (off != [0, 0] or tuple(size) != (fw, fh)):   # extra px around a matching / Sliced sprite
             sx, sy = w / fw, h / fh
             x, y, w, h = x + off[0] * sx, y + off[1] * sy, size[0] * sx, size[1] * sy
         node = {"name": nm, "parent": parent, "type": "image", "visible": n["visible"], "sprite": sprite,
