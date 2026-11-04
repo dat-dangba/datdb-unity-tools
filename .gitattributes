@@ -1,0 +1,3 @@
+# keep UIBuilder.cs byte-identical on every OS (setup.py compares it with the installed copy)
+* text=auto eol=lf
+*.cs text eol=lf

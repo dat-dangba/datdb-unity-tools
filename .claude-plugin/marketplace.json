@@ -1,0 +1,14 @@
+{
+  "name": "datdb-unity-tools",
+  "owner": {
+    "name": "datdb"
+  },
+  "plugins": [
+    {
+      "name": "datdb-unity",
+      "source": "./plugins/datdb-unity",
+      "description": "Unity tools for Claude Code. Skill datdb-unity-ui: build uGUI prefabs from a Figma frame, a PSD or a PNG mockup, reusing project sprites and TMP fonts.",
+      "version": "1.1.0"
+    }
+  ]
+}
