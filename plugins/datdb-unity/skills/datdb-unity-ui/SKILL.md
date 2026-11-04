@@ -24,7 +24,7 @@ Talk to the user in Vietnamese. Use the task list (update_plan) for the steps be
 **Fonts first.** Check every font the design needs (step 1) BEFORE any export, download, dedupe or spec work. If
 one is missing, STOP right there: nothing else runs, nothing changes.
 
-**Speed rules.** A PSD build takes about 5 tool calls. On Figma, the only reads are `create_session`, ONE
+**Speed rules.** A PSD build takes about 5 tool calls (two more when it writes a rename map). On Figma, the only reads are `create_session`, ONE
 `use_figma` (`figma_dump.js`) and one parallel batch (`get_design_context` for image URLs, `download_assets`,
 `get_screenshot`); `get_metadata` and a second `use_figma` are no longer needed.
 - Run independent calls in parallel (Figma: the step 0 setup and the step 1 `use_figma` read). A PSD/PNG font
@@ -79,7 +79,8 @@ in every path, including the C# strings.
   or a source path (wins). Unused keys are warned. Sprites in this UI's own folder used by a renamed layer take
   the new name (several users → their common prefix: `Sparkle1..3` → `Sparkle.png`), moved with the GUID kept.
   When a design has auto names (`Group 5`, `Rectangle 11`, `Shape 1 copy`) or content-named texts and no map
-  exists, propose a map to the user before building.
+  exists, write the map yourself and use it right away, without asking (step 2, "Rename map"). An existing map
+  is used as it is: never overwrite it.
 - Images go in `Assets/_Project/Images/UI/`:
   - `Common/`: images used by 2+ UIs. Keep this folder even when it's empty.
   - `<UI name>/`: images only this UI uses. File names follow the layer names.
@@ -203,6 +204,20 @@ $PY -I -B $S/scripts/make_spec.py <file.psd> . <scratchpad>/build_<name> [--name
 
 Edit `spec.json` only when a warning needs it.
 
+### Rename map (automatic, no confirmation)
+When no map exists (no `<source>.names.json`, no `--names`) and some layer names in the spec don't follow the
+naming rule above:
+1. Look at the design once (PSD: `<build>/psd_export/_composite.png`; Figma: the screenshot) to tell each
+   layer's role. Exported sizes or average colors of the layers' PNGs help with layers that are hard to spot.
+2. Write the map: a key for every layer that needs a new name, and none for layers that already follow the rule
+   (`CloseButton`, `HomeButton`). Shapes that repeat share a stem (`Sparkle1..3`); swaps share the stem
+   (`HintIcon`/`UndoIcon`); the top group is `Content`. PSD/PNG: save it as `<source>.names.json` next to the
+   source file, so the next build picks it up. Figma: save it as `<build>/names.json` and pass `--names`.
+3. Run the same spec command again. `renamed` should count every key, and `warnings` must not list unused keys.
+4. Go straight on to step 3. Do not ask the user about the names.
+
+PNG: you name the layers yourself in `layout.json`, so give them the right names there and skip the map.
+
 ## Step 3: Build (ONE Unity_RunCommand)
 
 ```csharp
@@ -239,6 +254,8 @@ $PY -I -B $S/scripts/verify.py <scratchpad>/build_<name>
 
 - The prefab path (`report.prefab`) and its hierarchy. Say that no scene was changed.
 - Images: what was reused, what was moved to `Common/`, what is new, and empty folders the user should delete.
+- The rename map, when you wrote one this turn: its path and an `old → new` table. Tell the user they can edit
+  it and rebuild with `--replace`.
 - Fonts and outline materials used or created.
 - Hidden layers, what still needs the user (empty layers, onClick not wired),
   and what you could not verify (e.g. strokes of hidden variants are only checked at 1×).
